@@ -1,0 +1,19 @@
+# Accelerate Configuration for Multi-GPU Training
+# This is an example config file for accelerate
+# Run: accelerate launch --config_file configs/accelerate_config.yaml train.py --config configs/your_task.yaml
+
+compute_environment: LOCAL_MACHINE
+distributed_type: MULTI_GPU  # or NO, FSDP, DEEPSPEED
+downcast_bf16: 'no'
+gpu_ids: all  # or specific GPU IDs like: 0,1,2,3
+machine_rank: 0
+main_training_function: main
+mixed_precision: bf16  # or fp16, no
+num_machines: 16
+num_processes: 16  # Number of GPUs to use
+rdzv_backend: static
+same_network: true
+tpu_env: []
+tpu_use_cluster: false
+tpu_use_sudo: false
+use_cpu: false

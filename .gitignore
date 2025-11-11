@@ -4,3 +4,16 @@ instruction_tuning_dvora/peft/*
 instruction_tuning_dvora/COPYRIGHT.txt
 instruction_tuning_dvora/get_avg_score.py
 instruction_tuning_dvora/Software Evaluation License.pdf
+
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+*.so
+*.dylib
+*.egg
+*.egg-info/
+**/wandb
+wandb/
+.vscode/
+.DS_Store
