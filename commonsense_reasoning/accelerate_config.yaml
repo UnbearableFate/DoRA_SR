@@ -9,8 +9,8 @@ gpu_ids: all  # or specific GPU IDs like: 0,1,2,3
 machine_rank: 0
 main_training_function: main
 mixed_precision: bf16  # or fp16, no
-num_machines: 16
-num_processes: 16  # Number of GPUs to use
+num_machines: 8
+num_processes: 8  # Number of GPUs to use
 rdzv_backend: static
 same_network: true
 tpu_env: []

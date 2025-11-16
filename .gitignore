@@ -17,3 +17,5 @@ instruction_tuning_dvora/Software Evaluation License.pdf
 wandb/
 .vscode/
 .DS_Store
+**/outputs
+**/*.o*

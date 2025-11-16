@@ -8,10 +8,12 @@
 
 python finetune.py \
     --base_model 'Qwen/Qwen3-1.7B' \
-    --data_path '/home/yu/workspace/LLM-Adapters/ft-training_set/commonsense_170k.json' \
+    --data_path '/work/xg24i002/x10041/LLM-Adapters/ft-training_set/commonsense_170k.json' \
     --output_dir ./output \
-    --batch_size 2  --per_device_train_batch_size 2 --num_epochs 3 \
-    --learning_rate 2e-4 --cutoff_len 256 --val_set_size 120 \
-    --eval_step 80 --save_step 80  --adapter_name dora \
+    --batch_size 32  --per_device_train_batch_size 4 --num_epochs 3 \
+    --learning_rate 1.5e-4 --cutoff_len 256 --val_set_size 128 \
+    --eval_step 20 --save_step 100  --adapter_name lora \
     --target_modules '["q_proj", "k_proj", "v_proj", "up_proj", "down_proj"]' \
-    --lora_r 8 --lora_alpha 16 --use_gradient_checkpointing
+    --lora_r 32 --lora_alpha 64 --bf16 \
+    --enable_torch_compile \
+    #--disable_cudnn_sdpa --disable_flash_sdpa 

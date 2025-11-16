@@ -37,6 +37,22 @@ from peft import (  # noqa: E402
 from transformers import AutoModelForCausalLM, AutoTokenizer, LlamaTokenizer, AutoModel  # noqa: F402
 from accelerate import Accelerator ,DistributedType
 
+from SpectralRefactorTrainer import SpectralRefactorTrainer
+
+
+def seed_everything(seed: int):
+    import random, os
+    import numpy as np
+    import torch
+
+    random.seed(seed)
+    os.environ["PYTHONHASHSEED"] = str(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = True
+
 def train(
         # model/data params
         base_model: str = "",  # the only required argument
@@ -49,7 +65,7 @@ def train(
         per_device_train_batch_size: int = 4,
         num_epochs: int = 3,
         learning_rate: float = 3e-4,
-        weight_decay: float = 0.0,
+        weight_decay: float = 0.01,
         cutoff_len: int = 256,
         val_set_size: int = 2000,
         use_gradient_checkpointing: bool = False,
@@ -60,6 +76,7 @@ def train(
         lora_alpha: int = 16,
         lora_dropout: float = 0.05,
         lora_target_modules: List[str] = None,
+        init_lora_weights: str = True,
         # bottleneck adapter hyperparams
         bottleneck_size: int = 256,
         non_linearity: str = "tanh",
@@ -81,7 +98,29 @@ def train(
         wandb_online: bool = True,
         resume_from_checkpoint: str = None,  # either training checkpoint or final adapter
         timestamp: Optional[str] = None,
+        seed: int = 42,
+        bf16: bool = False,
+        # stability params
+        attn_implementation: str = "eager",  # use "eager" for stability, "flash_attention_2" after stack upgrade
+        disable_cudnn_sdpa: bool = False,  # disable cuDNN SDPA to avoid bf16 instability
+        disable_flash_sdpa: bool = False,  # disable Flash SDPA if needed
+        enable_torch_compile: bool = False,  # enable after confirming stability
+        #trainer
+        use_sr_trainer: bool = False,
+
+        
 ):
+    # Configure SDPA backends for bf16 stability
+    # https://docs.pytorch.org/docs/stable/generated/torch.nn.functional.scaled_dot_product_attention.html
+    # https://github.com/pytorch/pytorch/issues/100005
+    if disable_cudnn_sdpa:
+        torch.backends.cuda.enable_cudnn_sdp(False)
+        print("Disabled cuDNN SDPA for bf16 stability")
+    if disable_flash_sdpa:
+        torch.backends.cuda.enable_flash_sdp(False)
+        print("Disabled Flash SDPA")
+    torch.backends.cuda.enable_mem_efficient_sdp(True)
+    
     accelerator = Accelerator()
     if accelerator.is_main_process:
         print(
@@ -115,13 +154,26 @@ def train(
             f"wandb_project: {wandb_project}\n"
             f"wandb_online: {wandb_online}\n"
             f"resume_from_checkpoint: {resume_from_checkpoint}\n"
+            f"seed: {seed}\n"
+            f"bf16: {bf16}\n"
+            f"attn_implementation: {attn_implementation}\n"
+            f"disable_cudnn_sdpa: {disable_cudnn_sdpa}\n"
+            f"enable_torch_compile: {enable_torch_compile}\n"
         )
+        print(accelerator.state)
+
     assert (
         base_model
     ), "Please specify a --base_model, e.g. --base_model='decapoda-research/llama-7b-hf'"
-    device_map = "auto"
-    tags = [base_model.split("/")[-1], adapter_name, f"bs{batch_size}",f'lr{learning_rate}',f"lora_r{lora_r}", f"lora_alpha{lora_alpha}"]
-    wandb_run_name = f"{base_model.split('/')[-1]}_{data_path.split('/')[-1]}_{adapter_name}_r{lora_r}_alpha{lora_alpha}"
+    
+    # device_map="auto" is for inference only; not supported for training
+    # https://discuss.huggingface.co/t/what-is-the-proper-way-to-use-device-map-auto-with-trainer/31801
+    device_map = None
+
+    seed_everything(seed)
+
+    tags = [base_model.split("/")[-1], adapter_name, f"bs{batch_size}",f'lr{learning_rate}',f"lora_r{lora_r}", f"lora_alpha{lora_alpha}", f"seed{seed}"]
+    wandb_run_name = f"{base_model.split('/')[-1]}_{adapter_name}_r{lora_r}_alpha{lora_alpha}_seed{seed}"
     output_dir = os.path.join(output_dir, wandb_run_name)
     
     if accelerator.is_main_process:
@@ -135,30 +187,49 @@ def train(
             config=locals(),
             tags=tags
         )
+    
+    # Keep master weights in fp32 for stability with bf16 training
+    # bf16=True in TrainingArguments uses AMP, not hard-casting
+    # https://huggingface.co/docs/transformers/en/perf_train_gpu_one#bf16
+    dtype = torch.float32  # Always use fp32 for master weights
 
     if load_8bit:
         model = AutoModelForCausalLM.from_pretrained(
             base_model,
             load_in_8bit=load_8bit,
-            dtype=torch.float16,
+            torch_dtype=torch.float16,
             device_map=device_map,
             trust_remote_code=True,
         )
     else:
+        # Use eager attention for bf16 stability
+        # https://huggingface.co/docs/transformers/en/attention_interface
         model = AutoModelForCausalLM.from_pretrained(
             base_model,
-            load_in_8bit=False,
-            dtype=torch.bfloat16,
-            device_map="auto",
+            torch_dtype=dtype,  # fp32 master weights
+            device_map=device_map,  # None for training
+            attn_implementation=attn_implementation,  # "eager" for stability
             trust_remote_code=True,
         )
 
+    print(f"Model loaded successfully. dtype: {model.dtype}, attn_implementation: {attn_implementation}")
     
     tokenizer = AutoTokenizer.from_pretrained(base_model, trust_remote_code=True)
 
-    tokenizer.pad_token_id = (
-        0  # unk. we want this to be different from the eos token
-    )
+    # Fix Llama-3.x tokenizer: add dedicated PAD token
+    # Token id 0 is "!" in Llama-3 tokenizers, not a valid PAD
+    # https://github.com/turboderp/exllamav2/issues/415
+    if tokenizer.pad_token_id is None or tokenizer.pad_token_id == 0:
+        if accelerator.is_main_process:
+            print(f"Adding dedicated PAD token (original pad_token_id: {tokenizer.pad_token_id})")
+        tokenizer.add_special_tokens({"pad_token": "<|pad|>"})
+        model.resize_token_embeddings(len(tokenizer))
+        model.config.pad_token_id = tokenizer.pad_token_id
+        if accelerator.is_main_process:
+            print(f"New pad_token_id: {tokenizer.pad_token_id}, vocab size: {len(tokenizer)}")
+    else:
+        tokenizer.pad_token_id = 0  # fallback for non-Llama models
+    
     tokenizer.padding_side = "left"  # Allow batched inference
 
     def tokenize(prompt, add_eos_token=True):
@@ -203,9 +274,8 @@ def train(
         return tokenized_full_prompt
 
     model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=use_gradient_checkpointing)
-    if accelerator.is_main_process:
-        print(model)
-    if adapter_name == "lora":
+    
+    if adapter_name in ["lora", "dora", "qalora", "rslora"]:
         config = LoraConfig(
             r=lora_r,
             lora_alpha=lora_alpha,
@@ -213,17 +283,10 @@ def train(
             lora_dropout=lora_dropout,
             bias="none",
             task_type="CAUSAL_LM",
-        )
-    elif adapter_name == "dora":
-        print("DoRA init")
-        config = LoraConfig(
-            r=lora_r,
-            lora_alpha=lora_alpha,
-            target_modules=target_modules,
-            lora_dropout=lora_dropout,
-            bias="none",
-            task_type="CAUSAL_LM",
-            use_dora=True,
+            use_dora=True if adapter_name == "dora" else False,
+            use_qalora= True if adapter_name == "qalora" else False,
+            use_rslora= True if adapter_name == "rslora" else False,
+            init_lora_weights= init_lora_weights,
         )
     # elif adapter_name == "bottleneck":
     #     config = BottleneckConfig(
@@ -246,8 +309,14 @@ def train(
     if accelerator.is_main_process:
         print(f"Adapter config:\n{config}")
     model = get_peft_model(model, config)
-    #if adapter_name == "prefix-tuning":
+    
+    # PEFT keeps adapters in fp32 by default for stability
+    # https://github.com/huggingface/peft/blob/main/src/peft/tuners/lora/layer.py
+    # Move model to device (but keep fp32 dtype for master weights)
     model.to('cuda')
+
+    if accelerator.is_main_process:
+        print(model)
 
     if data_path.endswith((".json", ".jsonl")):
         data = load_dataset("json", data_files=data_path)
@@ -278,36 +347,43 @@ def train(
 
     if val_set_size > 0:
         train_val = data["train"].train_test_split(
-            test_size=val_set_size, shuffle=True, seed=42
+            test_size=val_set_size, shuffle=True, seed=seed
         )
         train_data = (
-            train_val["train"].shuffle().map(generate_and_tokenize_prompt)
+            train_val["train"].shuffle().map(generate_and_tokenize_prompt, num_proc=8)
         )
         val_data = (
-            train_val["test"].shuffle().map(generate_and_tokenize_prompt)
+            train_val["test"].shuffle().map(generate_and_tokenize_prompt , num_proc=8)
         )
     else:
-        train_data = data["train"].shuffle().map(generate_and_tokenize_prompt)
+        train_data = data["train"].shuffle().map(generate_and_tokenize_prompt, num_proc=8)
         val_data = None
 
     gradient_accumulation_steps = batch_size // per_device_train_batch_size
     if accelerator.distributed_type == DistributedType.MULTI_GPU and accelerator.num_processes > 1:
         gradient_accumulation_steps = gradient_accumulation_steps // accelerator.num_processes
-        assert gradient_accumulation_steps * accelerator.num_processes * per_device_train_batch_size == batch_size, "batch_size must be divisible by num_processes"
-    trainer = transformers.Trainer(
-        model=model,
-        train_dataset=train_data,
-        eval_dataset=val_data,
-        args=transformers.TrainingArguments(
+        assert gradient_accumulation_steps * accelerator.num_processes * per_device_train_batch_size == batch_size, f"batch_size {batch_size}, num_processes {accelerator.num_processes}, per_device_train_batch_size {per_device_train_batch_size} not aligned."
+
+    common_args = {
+        "model": model,
+        "train_dataset": train_data,
+        "eval_dataset": val_data,
+        "args": transformers.TrainingArguments(
             per_device_train_batch_size=per_device_train_batch_size,
             gradient_accumulation_steps=gradient_accumulation_steps,
-            warmup_steps=100,
+            lr_scheduler_type="cosine",
+            warmup_ratio=0.06,
             num_train_epochs=num_epochs,
             learning_rate=learning_rate,
             weight_decay=weight_decay,
-            bf16=True,
+            # bf16=True uses AMP (automatic mixed precision) for bf16 compute
+            # while keeping master weights in fp32 - this is the recommended approach
+            # https://huggingface.co/docs/transformers/en/perf_train_gpu_one#bf16
+            bf16=bf16,
+            fp16=False,
             logging_steps=50,
-            optim="adamw_torch_fused",
+            optim="adamw_torch",
+            max_grad_norm=1.0,
             eval_strategy="steps" if val_set_size > 0 else "no",
             save_strategy="steps",
             eval_steps=eval_step if val_set_size > 0 else None,
@@ -315,14 +391,31 @@ def train(
             output_dir=output_dir,
             save_total_limit=3,
             load_best_model_at_end=True if val_set_size > 0 else False,
-            ddp_find_unused_parameters= True if accelerator.distributed_type == "MULTI_GPU" else None,
+            ddp_find_unused_parameters= False,
             group_by_length=group_by_length,
             report_to="wandb" if accelerator.is_main_process else None,
-        ),
-        data_collator=transformers.DataCollatorForSeq2Seq(
+            dataloader_pin_memory=True,
+            dataloader_persistent_workers=True,
+            dataloader_num_workers=8,
+            dataloader_prefetch_factor=4,
+            data_seed=seed,
+            seed=seed,
+            ),
+        "data_collator": transformers.DataCollatorForSeq2Seq(
             tokenizer, pad_to_multiple_of=8, return_tensors="pt", padding=True
-        ),
-    )
+            ),
+        }
+    if use_sr_trainer:
+        trainer = SpectralRefactorTrainer(
+            **common_args,
+            refactor_every = 100,
+            balance_lambda = 0.8,
+        )
+    else:
+        trainer = transformers.Trainer(
+            **common_args,
+        )
+        
     model.config.use_cache = False
 
     old_state_dict = model.state_dict
@@ -332,8 +425,14 @@ def train(
         )
     ).__get__(model, type(model))
 
-    if torch.__version__ >= "2" and sys.platform != "win32":
+    # Only enable torch.compile after confirming training stability
+    # https://github.com/pytorch/pytorch/issues/100005
+    if torch.__version__ >= "2" and sys.platform != "win32" and enable_torch_compile:
+        if accelerator.is_main_process:
+            print("Enabling torch.compile")
         model = torch.compile(model)
+    elif enable_torch_compile and accelerator.is_main_process:
+        print("torch.compile requested but not available (PyTorch < 2.0 or Windows)")
 
     accelerator.wait_for_everyone()
     start_time = time.time()
@@ -343,15 +442,15 @@ def train(
         print(
             f"Training time: {((time.time() - start_time)/60):.2f} minutes for {num_epochs} epochs"
         )
-        wandb.log({"training_time_minutes": (time.time() - start_time)/60})
-        wandb.log({"max_memory_allocated_GB": torch.cuda.max_memory_allocated()/1e9})
         model.save_pretrained(output_dir)
+        wandb.finish()
     
     accelerator.wait_for_everyone()
 
     print(
         "\n If there's a warning about missing keys above, please disregard :)"
     )
+    accelerator.end_training()
 
 
 def generate_prompt(data_point):
