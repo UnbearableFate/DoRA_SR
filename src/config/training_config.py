@@ -75,7 +75,7 @@ class OptimizationConfig:
     per_device_eval_batch_size: int = 4
     gradient_accumulation_steps: Optional[int] = None
     lr_scheduler_type: str = "cosine"
-    logging_steps: int = 50
+    logging_steps: int = 10
     save_steps: int = 100
     eval_steps: int = 100
     save_total_limit: int = 3
@@ -122,3 +122,10 @@ class TrainingConfig:
             "runtime": vars(self.runtime),
             "wandb": vars(self.wandb),
         }
+
+repeat_experiment_parameters = {
+    "init_lora_weights" : [True, 'corda', 'eva','pissa'],
+}
+
+def repeat_experiment_init_lora_weights(training_config: TrainingConfig,index:int) -> dict:
+    training_config.lora.init_lora_weights = repeat_experiment_parameters['init_lora_weights'][index]

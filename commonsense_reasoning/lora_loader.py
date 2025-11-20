@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Optional
+from dataclasses import dataclass, field
+from typing import List, Optional, Union
 
 import torch
 from torch.utils.data import DataLoader
@@ -16,8 +17,36 @@ from peft import LoraConfig, get_peft_model, initialize_lora_eva_weights, prepar
 from peft.tuners.lora.corda import preprocess_corda
 from peft.tuners.lora.config import CordaConfig, EvaConfig
 
-from src.config import LoraHyperparameters, ModelConfig
+@dataclass
+class LoraHyperparameters:
+    """Hyperparameters for the LoRA-family adapters."""
 
+    variant: str = "lora"  # lora, dora, qalora, rslora
+    r: int = 16
+    alpha: int = 32
+    dropout: float = 0.05
+    bias: str = "none"
+    target_modules: List[str] = field(
+        default_factory=lambda: ["q_proj", "k_proj", "v_proj", "o_proj", "up_proj", "down_proj"]
+    )
+    init_lora_weights: Union[bool, str, None] = True # ["gaussian", "eva", "olora", "pissa", "pissa_niter_[number of iters]", "corda", "loftq", "orthogonal"]
+    init_num_samples: int = 512
+    init_batch_size: int = 8
+    corda_method: str = "kpm"  # kpm or ipm, only used if init_lora_weights is "corda"
+
+@dataclass
+class ModelConfig:
+    """Base model loading parameters."""
+
+    base_model: str = "meta-llama/Llama-3.1-8B"
+    attn_implementation: Optional[str] = "sdpa"
+    torch_dtype = torch.float32
+    load_in_4bit: bool = False
+    load_in_8bit: bool = False
+    trust_remote_code: bool = True
+    gradient_checkpointing: bool = False
+    pad_token: str = "<|pad|>"
+    device_map: Optional[str] = None
 
 _VARIANT_TO_FLAGS = {
     "lora": {"use_dora": False, "use_rslora": False, "use_qalora": False},
@@ -81,7 +110,7 @@ def get_lora_config(lora_cfg: LoraHyperparameters):
     eva_config = None
     if lora_cfg.init_lora_weights == "corda":
             corda_config = CordaConfig(
-                corda_method="kpm", # kpm or ipm
+                corda_method=lora_cfg.corda_method, # kpm or ipm
             )
     elif lora_cfg.init_lora_weights == "eva":
         eva_config = EvaConfig()
@@ -146,6 +175,7 @@ def get_peft_model_with_corda(base_model,lora_cfg: LoraConfig,sub_dataset,data_c
         if was_training:
             base_model.train()
 
+    print(f"Starting Corda preprocessing... with sub-dataset of size {len(sub_dataset)}")
     preprocess_corda(
         base_model,
         lora_cfg,
@@ -173,6 +203,7 @@ def get_peft_model_with_eva(
     )
 
     peft_model = get_peft_model(base_model, lora_cfg, low_cpu_mem_usage=True)
+    print(f"Initializing Eva LoRA weights... with sub-dataset of size {len(sub_dataset)}")
     initialize_lora_eva_weights(peft_model, dataloader)
     return peft_model
 

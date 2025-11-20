@@ -2,7 +2,7 @@
 import torch
 from .training_config import LoraHyperparameters, OptimizationConfig, RuntimeConfig, TrainingConfig, DataConfig ,ModelConfig, WandbConfig
 
-def build_config() -> TrainingConfig:
+def build_common_config() -> TrainingConfig:
     data_cfg = DataConfig(
         dataset_path="/work/xg24i002/x10041/LLM-Adapters/ft-training_set/commonsense_170k.json",
         cutoff_len=512,
@@ -14,7 +14,6 @@ def build_config() -> TrainingConfig:
     model_cfg = ModelConfig(
         base_model="meta-llama/Llama-3.1-8B",
         attn_implementation="eager",
-        torch_dtype=torch.float32,
         load_in_4bit=False,
         load_in_8bit=False,
         trust_remote_code=True,
@@ -28,7 +27,7 @@ def build_config() -> TrainingConfig:
         dropout=0.05,
         bias="none",
         target_modules=["q_proj", "k_proj", "v_proj", "up_proj", "down_proj"],
-        init_lora_weights=True,
+        init_lora_weights="corda", # corda, eva,
         init_num_samples=512,
         init_batch_size=8,
     )
@@ -84,3 +83,7 @@ def build_config() -> TrainingConfig:
         runtime=runtime_cfg,
         wandb=wandb_cfg,
     )
+
+repeat_experiment_parameters = {
+    "init_lora_weights" : [True, 'corda', 'eva','pissa','guss'],
+}
