@@ -56,12 +56,12 @@ mpirun --mca mpi_abort_print_stack 1 \
                 '"${PYTHON_PATH}"' my_finetune.py \
                     --base_model=meta-llama/Llama-3.1-8B \
                     --data_path=/work/xg24i002/x10041/LLM-Adapters/ft-training_set/commonsense_170k.json \
-                    --output_dir=./outputs \
-                    --batch_size=64 \
+                    --output_dir=./outputs/eva_hp \
+                    --batch_size=32 \
                     --per_device_train_batch_size=2 \
                     --num_epochs=3 \
                     --learning_rate=2e-4 \
-                    --weight_decay=0.01 \
+                    --weight_decay=0.0 \
                     --cutoff_len=512 \
                     --val_set_size=1024 \
                     --eval_step=100 \
@@ -70,7 +70,7 @@ mpirun --mca mpi_abort_print_stack 1 \
                     --target_modules="[\"q_proj\",\"k_proj\",\"v_proj\",\"o_proj\",\"gate_proj\",\"up_proj\",\"down_proj\"]" \
                     --lora_r=32 \
                     --lora_alpha=64 \
-                    --lora_dropout=0.05 \
+                    --lora_dropout=0.0 \
                     --bf16 \
                     --init_lora_weights=olora \
                     --timestamp='"${timestamp}"' \

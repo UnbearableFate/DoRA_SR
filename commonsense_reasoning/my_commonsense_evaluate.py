@@ -8,6 +8,7 @@
 import copy
 import json
 import os
+from pathlib import Path
 import re
 import sys
 import argparse
@@ -79,8 +80,9 @@ def main(
         outputs = [o.split(".")[-1].strip() for o in outputs]
         return outputs
 
-    save_file = f'experiment/{args.dataset}_{str(args.lora_weights).split("/")[-1]}.json'
-    create_dir('experiment/')
+    save_file = Path('experiment',str(args.lora_weights).split("/")[-1],f'{args.dataset}.json')
+    results_file = Path('experiment',str(args.lora_weights).split("/")[-1],"results.txt")
+    create_dir(save_file.parent)
 
     dataset = load_data(args)
     batches = create_batch(dataset, args.batch_size)
@@ -129,6 +131,9 @@ def main(
     })
     with open(save_file, 'w') as f:
         json.dump(output_data, f, indent=4)
+    with open(results_file, 'a') as f:
+        f.write(f'dataset: {args.dataset}, accuracy: {correct / current}, memory: {torch.cuda.max_memory_allocated() /1024/1024 if torch.cuda.is_available() else 0}, '
+                f'time: {time.time() - start_time}\n')
     print('test finished')
 
 

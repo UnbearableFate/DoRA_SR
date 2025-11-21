@@ -309,7 +309,7 @@ def train(
         target_modules=target_modules,
         init_lora_weights=init_lora_weights,
         init_num_samples=1024,
-        init_batch_size=8,
+        init_batch_size=2,
     )
 
     lora_config = get_lora_config(lora_hyperparams)
@@ -395,6 +395,8 @@ def train(
             ),
         }
     if use_sr_trainer:
+        if accelerator.is_main_process:
+            print(f"Using SpectralRefactorTrainer, refactor_every=100, balance_lambda=0.8")
         trainer = SpectralRefactorTrainer(
             **common_args,
             refactor_every = 100,

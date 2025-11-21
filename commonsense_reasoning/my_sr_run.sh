@@ -2,7 +2,7 @@
 #PBS -q regular-g
 #PBS -W group_list=xg24i002
 #PBS -l select=16:mpiprocs=1
-#PBS -l walltime=03:00:00
+#PBS -l walltime=03:30:00
 #PBS -j oe
 #PBS -m abe
 
@@ -66,14 +66,15 @@ mpirun --mca mpi_abort_print_stack 1 \
                     --val_set_size=1024 \
                     --eval_step=100 \
                     --save_step=100 \
-                    --adapter_name=lora \
+                    --adapter_name=dora \
                     --target_modules="[\"q_proj\",\"k_proj\",\"v_proj\",\"o_proj\",\"gate_proj\",\"up_proj\",\"down_proj\"]" \
                     --lora_r=32 \
                     --lora_alpha=64 \
                     --lora_dropout=0.05 \
                     --bf16 \
-                    --init_lora_weights=olora \
+                    --init_lora_weights=True \
                     --timestamp='"${timestamp}"' \
                     --seed=17 \
+                    --use_sr_trainer \
                     --enable_torch_compile '
                     #--use_sr_trainer \
