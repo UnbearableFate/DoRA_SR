@@ -93,10 +93,7 @@ class SpectralRefactorTrainer(Trainer):
 
     @torch.no_grad()
     def _refactor_once(self):
-        if self.state.global_step < self.warmup_steps:
-            return
-        if self.state.global_step < self.refactor_every or self.state.global_step % self.refactor_every != 0 :
-            return
+        
         model = self.model
         was_training = model.training
         model.eval()
@@ -196,5 +193,9 @@ class SpectralRefactorTrainer(Trainer):
     def training_step(self, model, inputs,num_items_in_batch):
         ret = super().training_step(model, inputs,num_items_in_batch)
         if hasattr(self, 'optimizer') and self.optimizer is not None:
+            if self.state.global_step < self.warmup_steps:
+                return ret
+            if self.state.global_step < self.refactor_every or self.state.global_step % self.refactor_every != 0 :
+                return ret
             self._refactor_once()
         return ret
