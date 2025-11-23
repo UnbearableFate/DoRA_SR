@@ -11,7 +11,7 @@ set -euo pipefail
 cd /work/xg24i002/x10041/DoRA_SR/commonsense_reasoning
 
 PYTHON_PATH="/work/xg24i002/x10041/lora-ns/.venv/bin/"
-LORA_WEIGHT="/work/xg24i002/x10041/DoRA_SR/commonsense_reasoning/outputs/Llama-3.1-8B/R32/Llama-3.1-8B_r32_alpha64_pissa_lora_normal_seed17_20251121024645"
+LORA_WEIGHT="/work/xg24i002/x10041/DoRA_SR/commonsense_reasoning/outputs/eva_hp/Llama-3.1-8B/R16/Llama-3.1-8B_r16_alpha1_eva_lora_normal_seed17_20251121182901"
 
 export HF_HOME="/work/xg24i002/x10041/hf_home"
 export HF_DATASETS_CACHE="/work/xg24i002/x10041/data"

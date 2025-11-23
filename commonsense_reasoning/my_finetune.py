@@ -65,6 +65,8 @@ def train(
         per_device_train_batch_size: int = 4,
         num_epochs: int = 3,
         learning_rate: float = 3e-4,
+        lr_scheduler_type: str = "cosine",
+        warmup_step: int = 100,
         weight_decay: float = 0.01,
         cutoff_len: int = 256,
         val_set_size: int = 2000,
@@ -309,7 +311,7 @@ def train(
         target_modules=target_modules,
         init_lora_weights=init_lora_weights,
         init_num_samples=1024,
-        init_batch_size=2,
+        init_batch_size=4,
     )
 
     lora_config = get_lora_config(lora_hyperparams)
@@ -360,8 +362,8 @@ def train(
         "args": transformers.TrainingArguments(
             per_device_train_batch_size=per_device_train_batch_size,
             gradient_accumulation_steps=gradient_accumulation_steps,
-            lr_scheduler_type="cosine",
-            warmup_steps=300,
+            lr_scheduler_type=lr_scheduler_type,
+            warmup_steps=warmup_step,
             num_train_epochs=num_epochs,
             learning_rate=learning_rate,
             weight_decay=weight_decay,
@@ -399,8 +401,9 @@ def train(
             print(f"Using SpectralRefactorTrainer, refactor_every=100, balance_lambda=0.8")
         trainer = SpectralRefactorTrainer(
             **common_args,
-            refactor_every = 100,
+            refactor_every = 103,
             balance_lambda = 0.8,
+            damping_eps = 1e-6,
         )
     else:
         trainer = transformers.Trainer(
