@@ -61,8 +61,8 @@ mpirun --mca mpi_abort_print_stack 1 \
                     --batch_size=32 \
                     --per_device_train_batch_size=2 \
                     --num_epochs=1 \
-                    --learning_rate=4e-4 \
-                    --lr_scheduler_type=linear \
+                    --learning_rate=5e-4 \
+                    --lr_scheduler_type=cosine \
                     --warmup_step=160 \
                     --weight_decay=0.0 \
                     --cutoff_len=512 \
@@ -75,7 +75,7 @@ mpirun --mca mpi_abort_print_stack 1 \
                     --lora_alpha=1 \
                     --lora_dropout=0.0 \
                     --bf16 \
-                    --init_lora_weights=True \
+                    --init_lora_weights=eva \
                     --timestamp='"${timestamp}"' \
                     --seed=17 \
                     --enable_torch_compile '

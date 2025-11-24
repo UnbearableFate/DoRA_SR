@@ -58,25 +58,25 @@ mpirun --mca mpi_abort_print_stack 1 \
                 '"${PYTHON_PATH}"' my_finetune.py \
                     --base_model=meta-llama/Llama-3.1-8B \
                     --data_path=/work/xg24i002/x10041/LLM-Adapters/ft-training_set/commonsense_170k.json \
-                    --output_dir=./outputs/2e \
+                    --output_dir=./outputs/1124 \
                     --batch_size=32 \
                     --per_device_train_batch_size=2 \
-                    --num_epochs=2 \
-                    --learning_rate=4e-4 \
-                    --lr_scheduler_type=cosine \
+                    --num_epochs=1 \
+                    --learning_rate=5e-4 \
+                    --lr_scheduler_type=linear \
                     --warmup_step=160 \
                     --weight_decay=0.0 \
                     --cutoff_len=512 \
                     --val_set_size=1024 \
                     --eval_step=100 \
                     --save_step=100 \
-                    --adapter_name=lora \
+                    --adapter_name=dora \
                     --target_modules="[\"q_proj\",\"k_proj\",\"v_proj\",\"o_proj\",\"gate_proj\",\"up_proj\",\"down_proj\"]" \
                     --lora_r=16 \
                     --lora_alpha=1 \
                     --lora_dropout=0.0 \
                     --bf16 \
-                    --init_lora_weights=olora \
+                    --init_lora_weights=True \
                     --timestamp='"${timestamp}"' \
                     --seed=17 \
                     --enable_torch_compile '
@@ -104,26 +104,25 @@ mpirun --mca mpi_abort_print_stack 1 \
                 '"${PYTHON_PATH}"' my_finetune.py \
                     --base_model=meta-llama/Llama-3.1-8B \
                     --data_path=/work/xg24i002/x10041/LLM-Adapters/ft-training_set/commonsense_170k.json \
-                    --output_dir=./outputs/2e \
+                    --output_dir=./outputs/1124 \
                     --batch_size=32 \
                     --per_device_train_batch_size=2 \
-                    --num_epochs=2 \
-                    --learning_rate=4e-4 \
-                    --lr_scheduler_type=cosine \
+                    --num_epochs=1 \
+                    --learning_rate=5e-4 \
+                    --lr_scheduler_type=linear \
                     --warmup_step=160 \
                     --weight_decay=0.0 \
                     --cutoff_len=512 \
                     --val_set_size=1024 \
                     --eval_step=100 \
                     --save_step=100 \
-                    --adapter_name=lora \
+                    --adapter_name=rslora \
                     --target_modules="[\"q_proj\",\"k_proj\",\"v_proj\",\"o_proj\",\"gate_proj\",\"up_proj\",\"down_proj\"]" \
                     --lora_r=16 \
                     --lora_alpha=1 \
                     --lora_dropout=0.0 \
                     --bf16 \
-                    --init_lora_weights=olora \
+                    --init_lora_weights=True \
                     --timestamp='"${timestamp}"' \
-                    --use_sr_trainer \
                     --seed=17 \
                     --enable_torch_compile '
