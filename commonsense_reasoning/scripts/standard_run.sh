@@ -34,6 +34,7 @@ PYTHON_PATH="/work/xg24i002/x10041/lora-ns/.venv/bin/python"
 
 HF_HOME="/work/xg24i002/x10041/hf_home"
 HF_DATASETS_CACHE="/work/xg24i002/x10041/data"
+
 timestamp=$(date +%Y%m%d_%H%M%S)
 mpirun --mca mpi_abort_print_stack 1 \
        --report-bindings \
@@ -54,22 +55,22 @@ mpirun --mca mpi_abort_print_stack 1 \
                 export HF_HOME='"${HF_HOME}"'; \
                 export HF_DATASETS_CACHE='"${HF_DATASETS_CACHE}"'; \
                 echo "Running on rank $RANK out of $WORLD_SIZE"; \
-                '"${PYTHON_PATH}"' my_finetune.py \
+                '"${PYTHON_PATH}"' my_finetune_new.py \
                     --base_model=meta-llama/Llama-3.1-8B \
                     --data_path=/work/xg24i002/x10041/LLM-Adapters/ft-training_set/commonsense_170k.json \
-                    --output_dir=./outputs/eva_hp \
+                    --output_dir=./outputs/1128_eva \
                     --batch_size=32 \
                     --per_device_train_batch_size=2 \
                     --num_epochs=1 \
                     --learning_rate=5e-4 \
-                    --lr_scheduler_type=cosine \
+                    --lr_scheduler_type=linear \
                     --warmup_step=160 \
                     --weight_decay=0.0 \
                     --cutoff_len=512 \
                     --val_set_size=1024 \
                     --eval_step=100 \
                     --save_step=100 \
-                    --adapter_name=lora \
+                    --adapter_name=dora \
                     --target_modules="[\"q_proj\",\"k_proj\",\"v_proj\",\"o_proj\",\"gate_proj\",\"up_proj\",\"down_proj\"]" \
                     --lora_r=16 \
                     --lora_alpha=1 \
@@ -78,4 +79,5 @@ mpirun --mca mpi_abort_print_stack 1 \
                     --init_lora_weights=eva \
                     --timestamp='"${timestamp}"' \
                     --seed=17 \
+                    --wandb_project=DoRA_SR_Commonsense \
                     --enable_torch_compile '

@@ -96,7 +96,7 @@ def train(
         train_on_inputs: bool = False,  # if False, masks out inputs in loss
         group_by_length: bool = False,  # faster, but produces an odd training loss curve
         # wandb params
-        wandb_project: str = "",
+        wandb_project: str = "commonsense_reasoning",
         wandb_online: bool = True,
         resume_from_checkpoint: str = None,  # either training checkpoint or final adapter
         timestamp: Optional[str] = "",
@@ -109,6 +109,13 @@ def train(
         enable_torch_compile: bool = False,  # enable after confirming stability
         #trainer
         use_sr_trainer: bool = False,
+        sr_init_only: bool = True,
+        sr_init_steps: float = 320,
+        sr_init_clear_b: bool = True,
+        sr_init_momentum_map: bool = False,
+        sr_warmup_steps: int = 0,
+        sr_cooldown_steps: int = 0,
+        sr_refactor_every: int = 103,
 ):
     # Configure SDPA backends for bf16 stability
     # https://docs.pytorch.org/docs/stable/generated/torch.nn.functional.scaled_dot_product_attention.html
@@ -159,6 +166,10 @@ def train(
             f"disable_cudnn_sdpa: {disable_cudnn_sdpa}\n"
             f"enable_torch_compile: {enable_torch_compile}\n"
             f"use_sr_trainer: {use_sr_trainer}\n"
+            f"sr_init_only: {sr_init_only}\n"
+            f"sr_init_steps: {sr_init_steps}\n"
+            f"sr_init_clear_b: {sr_init_clear_b}\n"
+            f"sr_init_momentum_map: {sr_init_momentum_map}\n"
         )
         print(accelerator.state)
 
@@ -182,7 +193,7 @@ def train(
         else:
             os.environ["WANDB_MODE"] = "offline"
         wandb.init(
-            project="commonsense_reasoning",
+            project=wandb_project,
             name=wandb_run_name,
             config=locals(),
             tags=tags
@@ -311,7 +322,7 @@ def train(
         bias="none",
         target_modules=target_modules,
         init_lora_weights=init_lora_weights,
-        init_num_samples=1024,
+        init_num_samples=2048,
         init_batch_size=4,
     )
 
@@ -402,24 +413,28 @@ def train(
             print(f"Using SpectralRefactorTrainer, refactor_every=100, balance_lambda=0.8")
         trainer = SpectralRefactorTrainer(
             **common_args,
-            refactor_every = 103,
+            refactor_every = 10300000 if sr_init_only else sr_refactor_every,
             balance_lambda = 0.8,
-            damping_eps = 1e-6,
+            warmup_steps = sr_warmup_steps,
+            cooldown_steps = sr_cooldown_steps,
         )
         
         training_arguments0 = deepcopy(trainer.args)
-        training_arguments0.num_train_epochs = trainer.args.num_train_epochs * 0.05
+        training_arguments0.num_train_epochs = 0
+        training_arguments0.max_steps = sr_init_steps
         training_arguments0.output_dir = os.path.join(output_dir,"initial_phase")
         training_arguments0.report_to = "none"
+        training_arguments0.eval_strategy = "no"
+        training_arguments0.save_strategy = "no"
+        training_arguments0.load_best_model_at_end = False
         trainer0 = SpectralRefactorTrainer(
             model = model,
             train_dataset = train_data,
-            eval_dataset = val_data,
+            eval_dataset = None,
             args = training_arguments0,
             data_collator = trainer.data_collator,
-            refactor_every = 103,
-            balance_lambda = 0.8,
-            damping_eps = 1e-6,
+            refactor_every = 10300000,
+            balance_lambda = 1,
         )
     else:
         trainer = transformers.Trainer(
@@ -441,7 +456,7 @@ def train(
     start_time = time.time()
     if use_sr_trainer:
         trainer0.train(resume_from_checkpoint=resume_from_checkpoint)
-        trainer0._refactor_once()
+        trainer0.init_lora_weight(clear_b_at_init=sr_init_clear_b, use_momentum_map=sr_init_momentum_map)
     trainer.train(resume_from_checkpoint=resume_from_checkpoint)
 
     if accelerator.is_main_process:
@@ -461,16 +476,33 @@ def train(
 def generate_prompt(data_point):
     # sorry about the formatting disaster gotta move fast
     if data_point["input"]:
-        return f"""{data_point["instruction"]}. {data_point["input"]}. {data_point["output"]}""" # noqa: E501
+        return f"""{data_point["instruction"]}\n\n{data_point["input"]}\n\n{data_point["output"]}""" # noqa: E501
     else:
-        return f"""{data_point["instruction"]}. {data_point["output"]}""" # noqa: E501
+        return f"""{data_point["instruction"]}\n\n{data_point["output"]}""" # noqa: E501
+'''
 
-# def generate_prompt(data_point):
-#     # sorry about the formatting disaster gotta move fast
-#     if data_point["input"]:
-#         return f"""{data_point["instruction"]}. {data_point["input"]}. The correct answer is {data_point["answer"]}""" # noqa: E501
-#     else:
-#         return f"""{data_point["instruction"]}. The correct answer is {data_point["answer"]}""" # noqa: E501
+def generate_prompt(data_point):
+    # sorry about the formatting disaster gotta move fast
+    if data_point["input"]:
+        return f"""Below is an instruction that describes a task, paired with an input that provides further context. Write a response that appropriately completes the request. 
+
+                ### Instruction:
+                {data_point["instruction"]}
+                
+                ### Input:
+                {data_point["input"]}
+                
+                ### Response:
+                {data_point["output"]}""" # noqa: E501
+    else:
+        return f"""Below is an instruction that describes a task. Write a response that appropriately completes the request.  
+
+                ### Instruction:
+                {data_point["instruction"]}
+                
+                ### Response:
+                {data_point["output"]}""" # noqa: E501
+'''
 
 if __name__ == "__main__":
     fire.Fire(train)

@@ -6,6 +6,7 @@
 # distribution of this software and related documentation without an express
 # license agreement from NVIDIA CORPORATION is strictly prohibited.
 import copy
+from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
@@ -16,6 +17,7 @@ import time
 
 import fire
 
+import pandas
 import torch
 
 sys.path.append(os.path.join(os.getcwd(), "peft/src/"))
@@ -35,13 +37,18 @@ except:  # noqa: E722
     pass
 
 
-def main(
-        load_8bit: bool = False,
-        base_model: str = "",
-        lora_weights: str = "tloen/alpaca-lora-7b",
-        share_gradio: bool = False,
-):
-    args = parse_args()
+@dataclass
+class Args:
+    dataset: str = "boolq"
+    base_model: str = "meta-llama/Llama-3-7B"
+    lora_weights: str = "path_to_lora_weights"
+    batch_size: int = 16
+    load_8bit: bool = False
+    output_dir: str = "sub_experiment"
+
+
+def main(args: Args):
+    #args = parse_args()
 
     def evaluate(
             instructions,
@@ -77,11 +84,13 @@ def main(
             )
         s = generation_output.sequences
         outputs = tokenizer.batch_decode(s, skip_special_tokens=True)
-        outputs = [o.split(".")[-1].strip() for o in outputs]
+        outputs = [o.split("\n")[-1].strip() for o in outputs]
+        #outputs = [o.split("### Response:")[-1].strip() for o in outputs]
+        #outputs = [o.split(".")[-1].strip() for o in outputs]
         return outputs
 
-    save_file = Path('experiment',str(args.lora_weights).split("/")[-1],f'{args.dataset}.json')
-    results_file = Path('experiment',str(args.lora_weights).split("/")[-1],"results.txt")
+    save_file = Path('experiment',args.output_dir ,str(args.lora_weights).split("/")[-1],f'{args.dataset}.json')
+    results_file = Path('experiment',args.output_dir,str(args.lora_weights).split("/")[-1],"results.txt")
     create_dir(save_file.parent)
 
     dataset = load_data(args)
@@ -106,6 +115,8 @@ def main(
             label = data.get('answer')
             flag = False
             predict = extract_answer(args, output)
+            if predict == "":
+                predict = extract_answer2(args, output)
             if label == predict:
                 correct += 1
                 flag = True
@@ -124,6 +135,7 @@ def main(
 
     pbar.close()
     print('\n')
+    accuracy = correct / current
     output_data.append({
         'accuracy': correct / current,
         'memory': torch.cuda.max_memory_allocated() /1024/1024 if torch.cuda.is_available() else 0,
@@ -135,19 +147,42 @@ def main(
         f.write(f'dataset: {args.dataset}, accuracy: {correct / current}, memory: {torch.cuda.max_memory_allocated() /1024/1024 if torch.cuda.is_available() else 0}, '
                 f'time: {time.time() - start_time}\n')
     print('test finished')
+    return accuracy , results_file
 
 
 def create_dir(dir_path):
     if not os.path.exists(dir_path):
-        os.mkdir(dir_path)
+        os.makedirs(dir_path, exist_ok=True)
     return
-
 
 def generate_prompt(instruction, input=None):
     if input:
-        return f"""{instruction}. {input}.""" # noqa: E501
+        return f"""{instruction}\n\n{input}\n\n""" # noqa: E501
     else:
-        return f"""{instruction}.""" # noqa: E501
+        return f"""{instruction}\n\n""" # noqa: E501
+'''
+
+def generate_prompt(instruction, input=None):
+    if input:
+        return f"""Below is an instruction that describes a task, paired with an input that provides further context. Write a response that appropriately completes the request.
+
+                ### Instruction:
+                {instruction}
+
+                ### Input:
+                {input}
+
+                ### Response:
+                """  # noqa: E501
+    else:
+        return f"""Below is an instruction that describes a task. Write a response that appropriately completes the request. 
+
+                ### Instruction:
+                {instruction}
+
+                ### Response:
+                """  # noqa: E501
+'''
 
 def load_data(args) -> list:
     """
@@ -175,13 +210,10 @@ def create_batch(dataset, batch_size):
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--dataset', choices=["boolq", "piqa", "social_i_qa", "hellaswag", "winogrande", "ARC-Challenge", "ARC-Easy", "openbookqa"],
-                        required=True)
-    parser.add_argument('--adapter', choices=['LoRA', 'AdapterP', 'AdapterH', 'Parallel', 'DoRA'],
-                        required=True)
     parser.add_argument('--base_model', required=True)
-    parser.add_argument('--lora_weights', required=True)
-    parser.add_argument('--batch_size', type=int, required=True)
+    parser.add_argument('--lora_weights', default=None, type=str)
+    parser.add_argument('--lora_weights_dir', type=str, default=None)
+    parser.add_argument('--output_dir', type=str, default='sub_experiment')
     parser.add_argument('--load_8bit', action='store_true', default=False)
 
     return parser.parse_args()
@@ -323,8 +355,7 @@ def extract_answer(args, sentence: str) -> float:
             return ""
         return pred_answers[0]
 
-"""
-def extract_answer(args, sentence: str) -> float:
+def extract_answer2(args, sentence: str) -> float:
     dataset = args.dataset
     answer = sentence.strip().split(" ")[-1]
     if dataset == 'boolq':
@@ -340,8 +371,76 @@ def extract_answer(args, sentence: str) -> float:
         return "ending"+answer
     elif dataset == 'winogrande':
         return "option"+answer
-"""
 
+DATASET_CHOICES = ['piqa',"boolq", "social_i_qa", "hellaswag", "winogrande", "ARC-Challenge", "ARC-Easy", "openbookqa"]
 
 if __name__ == "__main__":
-    main()
+    command_line_args = parse_args()
+    if command_line_args.lora_weights_dir is None and command_line_args.lora_weights is None:
+        raise ValueError("Either --lora_weights_dir or --lora_weights must be provided.")
+    
+    if command_line_args.lora_weights_dir is None and command_line_args.lora_weights is not None:
+        # If only a single lora_weights path is provided, evaluate that directly
+        for dataset_name in DATASET_CHOICES:
+            if dataset_name != "social_i_qa":
+                continue
+            args = Args(
+                dataset=dataset_name,  # Default dataset, can be modified as needed
+                base_model=command_line_args.base_model,
+                lora_weights=command_line_args.lora_weights,
+                batch_size=32,
+                load_8bit=False,
+                output_dir=command_line_args.output_dir
+            )
+            print(f"\n正在评估: {args.lora_weights}")
+            main(args)
+        sys.exit(0)
+    # 遍历root_dir下第一层，获取以_数字结尾的文件夹
+
+    if command_line_args.lora_weights_dir is not None:
+        root_dir = Path(command_line_args.lora_weights_dir)
+        import re
+        pattern = re.compile(r'_\d{14}$')  # 匹配以_后跟14个数字结尾的文件夹
+        
+        lora_weight_dirs = []
+        for item in root_dir.iterdir():
+            if item.is_dir() and pattern.search(item.name):
+                lora_weight_dirs.append(item.absolute())
+        
+        print(f"找到 {len(lora_weight_dirs)} 个符合条件的文件夹:")
+        for dir_path in lora_weight_dirs:
+            print(f"  {dir_path}")
+        
+        # 如果需要对每个文件夹执行评估，可以遍历它们
+        result_data = []
+        for lora_weights_path in lora_weight_dirs:
+            model_name = lora_weights_path
+            model_results = {'model': model_name}
+            
+            for dataset_name in DATASET_CHOICES:
+                args = Args(
+                    dataset=dataset_name,  # 根据需要修改
+                    base_model=command_line_args.base_model,
+                    lora_weights=str(lora_weights_path),
+                    batch_size=32,
+                    load_8bit=False,
+                    output_dir=command_line_args.output_dir
+                )
+                print(f"\n正在评估: {args.lora_weights} on dataset: {dataset_name}")
+                acc, result_file = main(args)
+                model_results[dataset_name] = acc
+            
+            # 计算平均准确率
+            accuracies = [model_results[ds] for ds in DATASET_CHOICES]
+            model_results['average'] = sum(accuracies) / len(accuracies)
+            result_data.append(model_results)
+        
+        # 创建DataFrame并保存到CSV
+        result_df = pandas.DataFrame(result_data)
+        csv_output_path = Path('experiment', command_line_args.output_dir, 'all_results.csv')
+        create_dir(csv_output_path.parent)
+        result_df.to_csv(csv_output_path, index=False)
+        print(f"\n结果已保存到: {csv_output_path}")
+        print("\n汇总结果:")
+        print(result_df.to_string(index=False))
+            
