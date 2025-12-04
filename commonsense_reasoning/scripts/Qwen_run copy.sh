@@ -2,7 +2,7 @@
 #PBS -q regular-g
 #PBS -W group_list=xg24i002
 #PBS -l select=16:mpiprocs=1
-#PBS -l walltime=03:00:00
+#PBS -l walltime=05:30:00
 #PBS -j oe
 #PBS -m abe
 
@@ -58,7 +58,7 @@ mpirun --mca mpi_abort_print_stack 1 \
                 '"${PYTHON_PATH}"' my_finetune_new.py \
                     --base_model=Qwen/Qwen3-8B \
                     --data_path=/work/xg24i002/x10041/LLM-Adapters/ft-training_set/commonsense_170k.json \
-                    --output_dir=./outputs/s59 \
+                    --output_dir=./outputs/ \
                     --batch_size=32 \
                     --per_device_train_batch_size=2 \
                     --num_epochs=1 \
@@ -76,12 +76,11 @@ mpirun --mca mpi_abort_print_stack 1 \
                     --lora_alpha=1 \
                     --lora_dropout=0.0 \
                     --bf16 \
-                    --init_lora_weights=True \
+                    --init_lora_weights=pissa \
                     --timestamp='"${timestamp}"' \
                     --seed=17 \
                     --wandb_project=cs_qwen \
                     --enable_torch_compile '
-
 
 timestamp=$(date +%Y%m%d_%H%M%S)
 mpirun --mca mpi_abort_print_stack 1 \
@@ -106,7 +105,7 @@ mpirun --mca mpi_abort_print_stack 1 \
                 '"${PYTHON_PATH}"' my_finetune_new.py \
                     --base_model=Qwen/Qwen3-8B \
                     --data_path=/work/xg24i002/x10041/LLM-Adapters/ft-training_set/commonsense_170k.json \
-                    --output_dir=./outputs/s59 \
+                    --output_dir=./outputs \
                     --batch_size=32 \
                     --per_device_train_batch_size=2 \
                     --num_epochs=1 \
@@ -124,7 +123,7 @@ mpirun --mca mpi_abort_print_stack 1 \
                     --lora_alpha=1 \
                     --lora_dropout=0.0 \
                     --bf16 \
-                    --init_lora_weights=pissa \
+                    --init_lora_weights=orthogonal \
                     --timestamp='"${timestamp}"' \
                     --seed=42 \
                     --wandb_project=cs_qwen \
@@ -153,7 +152,7 @@ mpirun --mca mpi_abort_print_stack 1 \
                 '"${PYTHON_PATH}"' my_finetune_new.py \
                     --base_model=Qwen/Qwen3-8B \
                     --data_path=/work/xg24i002/x10041/LLM-Adapters/ft-training_set/commonsense_170k.json \
-                    --output_dir=./outputs/s59 \
+                    --output_dir=./outputs \
                     --batch_size=32 \
                     --per_device_train_batch_size=2 \
                     --num_epochs=1 \
@@ -173,6 +172,6 @@ mpirun --mca mpi_abort_print_stack 1 \
                     --bf16 \
                     --init_lora_weights=orthogonal \
                     --timestamp='"${timestamp}"' \
-                    --seed=59 \
+                    --seed=17 \
                     --wandb_project=cs_qwen \
                     --enable_torch_compile '

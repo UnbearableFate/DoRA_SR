@@ -11,7 +11,7 @@ set -euo pipefail
 cd /work/xg24i002/x10041/DoRA_SR/commonsense_reasoning
 
 PYTHON_PATH="/work/xg24i002/x10041/lora-ns/.venv/bin/"
-LORA_WEIGHT="/work/xg24i002/x10041/DoRA_SR/commonsense_reasoning/outputs/1128_eva/Llama-3.1-8B/R16"
+LORA_WEIGHT="/work/xg24i002/x10041/DoRA_SR/commonsense_reasoning/outputs/Qwen3-8B/R16"
 
 export HF_HOME="/work/xg24i002/x10041/hf_home"
 export HF_DATASETS_CACHE="/work/xg24i002/x10041/data"
@@ -19,6 +19,6 @@ export HF_DATASETS_CACHE="/work/xg24i002/x10041/data"
 timestamp=$(date +%Y%m%d_%H%M%S)
 
 "${PYTHON_PATH}python" my_commonsense_evaluate.py \
-    --base_model meta-llama/Llama-3.1-8B \
+    --base_model Qwen/Qwen3-8B \
     --lora_weights_dir "${LORA_WEIGHT}" \
-    --output_dir "1127_sr_init_test_${timestamp}"
+    --output_dir "1204_qwen_${timestamp}"

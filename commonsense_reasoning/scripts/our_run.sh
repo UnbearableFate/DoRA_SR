@@ -55,9 +55,9 @@ mpirun --mca mpi_abort_print_stack 1 \
                 export HF_DATASETS_CACHE='"${HF_DATASETS_CACHE}"'; \
                 echo "Running on rank $RANK out of $WORLD_SIZE"; \
                 '"${PYTHON_PATH}"' my_finetune_new.py \
-                    --base_model=meta-llama/Llama-3.1-8B \
+                    --base_model=Qwen/Qwen3-8B \
                     --data_path=/work/xg24i002/x10041/LLM-Adapters/ft-training_set/commonsense_170k.json \
-                    --output_dir=./outputs/1128_sr_cool2 \
+                    --output_dir=./outputs \
                     --batch_size=32 \
                     --per_device_train_batch_size=2 \
                     --num_epochs=1 \
@@ -79,12 +79,14 @@ mpirun --mca mpi_abort_print_stack 1 \
                     --timestamp='"${timestamp}"' \
                     --seed=17 \
                     --enable_torch_compile \
-                    --wandb_project=DoRA_SR_Commonsense \
+                    --wandb_project=cs_qwen \
                     --use_sr_trainer \
-                    --sr_init_only=True \
+                    --sr_init_only=False \
                     --sr_init_steps=320 \
                     --sr_init_clear_b=False \
-                    --sr_init_momentum_map=False ' 
+                    --sr_cooldown_steps=500 \
+                    --sr_refactor_every=101 \
+                    --sr_init_momentum_map=False '
 
 timestamp=$(date +%Y%m%d_%H%M%S)
 mpirun --mca mpi_abort_print_stack 1 \
@@ -107,9 +109,9 @@ mpirun --mca mpi_abort_print_stack 1 \
                 export HF_DATASETS_CACHE='"${HF_DATASETS_CACHE}"'; \
                 echo "Running on rank $RANK out of $WORLD_SIZE"; \
                 '"${PYTHON_PATH}"' my_finetune_new.py \
-                    --base_model=meta-llama/Llama-3.1-8B \
+                    --base_model=Qwen/Qwen3-8B \
                     --data_path=/work/xg24i002/x10041/LLM-Adapters/ft-training_set/commonsense_170k.json \
-                    --output_dir=./outputs/1128_sr_cool2 \
+                    --output_dir=./outputs \
                     --batch_size=32 \
                     --per_device_train_batch_size=2 \
                     --num_epochs=1 \
@@ -129,13 +131,13 @@ mpirun --mca mpi_abort_print_stack 1 \
                     --bf16 \
                     --init_lora_weights=True \
                     --timestamp='"${timestamp}"' \
-                    --seed=17 \
+                    --seed=42 \
                     --enable_torch_compile \
-                    --wandb_project=DoRA_SR_Commonsense \
+                    --wandb_project=cs_qwen \
                     --use_sr_trainer \
                     --sr_init_only=False \
                     --sr_init_steps=320 \
                     --sr_init_clear_b=False \
-                    --sr_cooldown_steps=1000 \
-                    --sr_refactor_every=201 \
+                    --sr_cooldown_steps=500 \
+                    --sr_refactor_every=101 \
                     --sr_init_momentum_map=False '

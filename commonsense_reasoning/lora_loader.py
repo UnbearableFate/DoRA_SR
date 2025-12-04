@@ -130,10 +130,10 @@ def get_lora_config(lora_cfg: LoraHyperparameters):
 
     return peft_config
 
-def attach_lora_adapter(base_model,lora_cfg: LoraConfig, train_dataset,tokenizer, init_num_samples:int, batch_size:int,seed: int):
+def attach_lora_adapter(base_model,lora_cfg: LoraConfig, train_dataset,tokenizer, init_num_samples:int, batch_size:int,seed: int,accelerator):
     if lora_cfg.init_lora_weights not in ["corda", "eva"]:
         return get_peft_model(base_model, lora_cfg)
-    
+    base_model = accelerator.prepare(base_model)
     sub_dataset = train_dataset.shuffle(seed=seed).select(range(init_num_samples))
     # data_collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
     columns_to_keep = ["input_ids", "attention_mask", "labels"]
@@ -149,7 +149,7 @@ def attach_lora_adapter(base_model,lora_cfg: LoraConfig, train_dataset,tokenizer
     if lora_cfg.init_lora_weights == "corda":
         return get_peft_model_with_corda(base_model, lora_cfg, sub_dataset,data_collator)
     elif lora_cfg.init_lora_weights == "eva":
-        return get_peft_model_with_eva(base_model, lora_cfg, sub_dataset,data_collator ,batch_size)
+        return get_peft_model_with_eva(base_model, lora_cfg, sub_dataset,data_collator ,batch_size,accelerator)
 
 def get_peft_model_with_corda(base_model,lora_cfg: LoraConfig,sub_dataset,data_collator):
     calib_loader = DataLoader(
@@ -189,6 +189,7 @@ def get_peft_model_with_eva(
         sub_dataset,
         data_collator,
         batch_size: int,
+        accelerator
     ):
     
     def get_input(examples):
@@ -201,6 +202,7 @@ def get_peft_model_with_eva(
         batch_size=batch_size,
         collate_fn=get_input,
     )
+    accelerator.prepare(dataloader)
 
     peft_model = get_peft_model(base_model, lora_cfg, low_cpu_mem_usage=True)
     print(f"Initializing Eva LoRA weights... with sub-dataset of size {len(sub_dataset)}")

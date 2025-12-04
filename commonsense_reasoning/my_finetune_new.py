@@ -184,7 +184,12 @@ def train(
     seed_everything(seed)
 
     tags = [base_model.split("/")[-1], adapter_name, f"bs{batch_size}",f'lr{learning_rate}',f"lora_r{lora_r}", f"lora_alpha{lora_alpha}", f"seed{seed}"]
-    wandb_run_name = f"{base_model.split('/')[-1]}_r{lora_r}_alpha{lora_alpha}_{init_lora_weights}_{adapter_name}_{"sr" if use_sr_trainer else "normal"}_seed{seed}_{timestamp}"
+    wandb_run_name = f"{base_model.split('/')[-1]}_r{lora_r}_alpha{lora_alpha}_{init_lora_weights}_{adapter_name}"
+    if use_sr_trainer:
+        wandb_run_name += "_sr-init"
+        if not sr_init_only:
+            wandb_run_name += "&train"
+    wandb_run_name += f"_s{seed}_{timestamp}"
     output_dir = os.path.join(output_dir,base_model.split('/')[-1],f"R{lora_r}",wandb_run_name)
     
     if accelerator.is_main_process:
@@ -322,7 +327,7 @@ def train(
         bias="none",
         target_modules=target_modules,
         init_lora_weights=init_lora_weights,
-        init_num_samples=2048,
+        init_num_samples=batch_size* sr_init_steps,
         init_batch_size=4,
     )
 
@@ -337,7 +342,8 @@ def train(
         tokenizer=tokenizer,
         init_num_samples=lora_hyperparams.init_num_samples,
         batch_size=lora_hyperparams.init_batch_size,
-        seed=seed,
+        seed=seed*2+1,
+        accelerator=accelerator,
     )
 
     if resume_from_checkpoint:
@@ -427,6 +433,7 @@ def train(
         training_arguments0.eval_strategy = "no"
         training_arguments0.save_strategy = "no"
         training_arguments0.load_best_model_at_end = False
+        training_arguments0.data_seed = seed * 2 + 1  # to avoid mixing data orders
         trainer0 = SpectralRefactorTrainer(
             model = model,
             train_dataset = train_data,

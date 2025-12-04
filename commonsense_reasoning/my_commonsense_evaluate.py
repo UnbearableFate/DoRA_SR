@@ -21,7 +21,7 @@ import pandas
 import torch
 
 sys.path.append(os.path.join(os.getcwd(), "peft/src/"))
-from peft import PeftModel
+from peft import PeftModel, PeftConfig
 from tqdm import tqdm
 from transformers import GenerationConfig, LlamaForCausalLM, LlamaTokenizer, AutoModelForCausalLM, AutoTokenizer
 
@@ -273,9 +273,15 @@ def load_model(args) -> tuple:
             print(f"Updating model.config.pad_token_id from {model.config.pad_token_id} to {tokenizer.pad_token_id}")
             model.config.pad_token_id = tokenizer.pad_token_id
         
+        # Fix for CorDA init error: override init_lora_weights to avoid needing eigens during inference
+        peft_config = PeftConfig.from_pretrained(lora_weights)
+        if getattr(peft_config, "init_lora_weights", None) == "corda":
+            peft_config.init_lora_weights = True
+
         model = PeftModel.from_pretrained(
             model,
             lora_weights,
+            config=peft_config,
             torch_dtype=torch.float16,
             device_map={"":0}
         )
@@ -382,8 +388,6 @@ if __name__ == "__main__":
     if command_line_args.lora_weights_dir is None and command_line_args.lora_weights is not None:
         # If only a single lora_weights path is provided, evaluate that directly
         for dataset_name in DATASET_CHOICES:
-            if dataset_name != "social_i_qa":
-                continue
             args = Args(
                 dataset=dataset_name,  # Default dataset, can be modified as needed
                 base_model=command_line_args.base_model,
@@ -415,7 +419,7 @@ if __name__ == "__main__":
         result_data = []
         for lora_weights_path in lora_weight_dirs:
             model_name = lora_weights_path
-            model_results = {'model': model_name}
+            model_results = {'model': str(model_name).split("/")[-1]}
             
             for dataset_name in DATASET_CHOICES:
                 args = Args(
