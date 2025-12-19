@@ -7,6 +7,7 @@
 # license agreement from NVIDIA CORPORATION is strictly prohibited.
 
 from copy import deepcopy
+import gc
 import os
 import sys
 import time
@@ -39,7 +40,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, LlamaTokenizer, Au
 from accelerate import Accelerator ,DistributedType
 
 from SpectralRefactorTrainer import SpectralRefactorTrainer
-
+from NewTrainer import NewTrainer
 
 def seed_everything(seed: int):
     import random, os
@@ -321,14 +322,14 @@ def train(
     
     lora_hyperparams = LoraHyperparameters(
         variant=adapter_name,
-        r=lora_r,
+        r=lora_r if not use_sr_trainer else lora_r * 2,
         alpha=lora_alpha,
         dropout=lora_dropout,
         bias="none",
         target_modules=target_modules,
         init_lora_weights=init_lora_weights,
         init_num_samples= 1024 if init_lora_weights == "lora_ga" else batch_size * sr_init_steps,
-        init_batch_size=1,
+        init_batch_size=2,
         corda_method='kpm',
         model_name_or_path=base_model,
         dataset_name=data_path.split("/")[-1] if "/" in data_path else data_path,
@@ -403,7 +404,7 @@ def train(
             save_steps=save_step,
             output_dir=output_dir,
             save_total_limit=3,
-            load_best_model_at_end=False, # if val_set_size > 0 else False,
+            load_best_model_at_end=False, #True if val_set_size > 0 else False,
             ddp_find_unused_parameters= False,
             group_by_length=group_by_length,
             report_to="wandb" if accelerator.is_main_process else None,
@@ -418,18 +419,11 @@ def train(
             tokenizer, pad_to_multiple_of=8, return_tensors="pt", padding=True
             ),
         }
+    
     if use_sr_trainer:
         if accelerator.is_main_process:
             print(f"Using SpectralRefactorTrainer, refactor_every=100, balance_lambda=0.8")
-        trainer = SpectralRefactorTrainer(
-            **common_args,
-            refactor_every = 10300000 if sr_init_only else sr_refactor_every,
-            balance_lambda = 0.8,
-            warmup_steps = sr_warmup_steps,
-            cooldown_steps = sr_cooldown_steps,
-        )
-        
-        training_arguments0 = deepcopy(trainer.args)
+        training_arguments0 = deepcopy(common_args["args"])
         training_arguments0.num_train_epochs = 0
         training_arguments0.max_steps = sr_init_steps
         training_arguments0.output_dir = os.path.join(output_dir,"initial_phase")
@@ -438,14 +432,56 @@ def train(
         training_arguments0.save_strategy = "no"
         training_arguments0.load_best_model_at_end = False
         training_arguments0.data_seed = seed * 2 + 1  # to avoid mixing data orders
-        trainer0 = SpectralRefactorTrainer(
+        trainer0 = NewTrainer(
             model = model,
             train_dataset = train_data,
             eval_dataset = None,
             args = training_arguments0,
-            data_collator = trainer.data_collator,
-            refactor_every = 10300000,
-            balance_lambda = 1,
+            data_collator = common_args["data_collator"],
+            rebuid_lora = True,
+        )
+        trainer0.train(resume_from_checkpoint=resume_from_checkpoint)
+        
+        # Synchronize before rank distribution
+        accelerator.wait_for_everyone()
+
+        trainer0.init_lora_weight(adjust_alpha=True, beta=0.25, clip_ratio=1.25)
+        """
+        # Compute rank pattern on main process
+        if accelerator.is_main_process:
+            rank_pattern, alpha_pattern , lora_A, lora_B = trainer0.lora_rank_distribution_and_init_weight(target_rank=lora_r)
+            print(f"Rank pattern and initial LoRA weights computed. \n\n rank_pattern \n {rank_pattern} \n\n alpha_pattern \n {alpha_pattern} \n")
+        
+        if accelerator.is_main_process:
+            # Pack data on main process
+            data_to_broadcast = [rank_pattern,alpha_pattern, lora_A, lora_B]
+        else:
+            data_to_broadcast = [None,None, None, None]
+        
+        # Broadcast from rank 0 to all processes
+        from torch.distributed import broadcast_object_list
+        broadcast_object_list(data_to_broadcast, src=0)
+        rank_pattern,alpha_pattern, lora_A, lora_B = data_to_broadcast
+        
+        if rank_pattern is not None:
+            # All processes reload base model
+            # Apply LoRA weights on all processes
+            model = NewTrainer.rebuid_lora_weights(
+                model=model,
+                rank_pattern=rank_pattern,
+                alpha_pattern=alpha_pattern,
+                lora_A=lora_A,
+                lora_B=lora_B,
+                lora_config=lora_config,
+            )
+        common_args["model"] = model
+        """
+        trainer = SpectralRefactorTrainer(
+            **common_args,
+            refactor_every = 10300000 if sr_init_only else sr_refactor_every,
+            balance_lambda = 0.8,
+            warmup_steps = sr_warmup_steps,
+            cooldown_steps = sr_cooldown_steps,
         )
     else:
         trainer = transformers.Trainer(
@@ -465,9 +501,7 @@ def train(
 
     accelerator.wait_for_everyone()
     start_time = time.time()
-    if use_sr_trainer:
-        trainer0.train(resume_from_checkpoint=resume_from_checkpoint)
-        trainer0.init_lora_weight(clear_b_at_init=sr_init_clear_b, use_momentum_map=sr_init_momentum_map)
+    print(f"Starting training... cuda memory allocated: {torch.cuda.memory_allocated()/1024/1024/1024:.2f} GB")
     trainer.train(resume_from_checkpoint=resume_from_checkpoint)
 
     if accelerator.is_main_process:

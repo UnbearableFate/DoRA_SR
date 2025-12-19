@@ -1,21 +1,24 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, fields
+from pathlib import Path
+import time
 from typing import List, Optional, Union
 
 import torch
 from torch.utils.data import DataLoader
 import tqdm
-from transformers import AutoModelForCausalLM, AutoTokenizer, DataCollatorForLanguageModeling, DataCollatorForSeq2Seq, DataCollatorWithPadding
-
-try:  # Optional dependency for quantization
-    from transformers import BitsAndBytesConfig
-except ImportError:  # pragma: no cover - bitsandbytes not always available
-    BitsAndBytesConfig = None
+from transformers import  DataCollatorForSeq2Seq
 
 from peft import LoraConfig, get_peft_model, initialize_lora_eva_weights, prepare_model_for_kbit_training
 from peft.tuners.lora.corda import preprocess_corda
 from peft.tuners.lora.config import CordaConfig, EvaConfig
+
+from my_peft import LoraGAConfig
+from accelerate import Accelerator
+
+import logging
+logger = logging.getLogger(__name__)
 
 @dataclass
 class LoraHyperparameters:
@@ -32,21 +35,30 @@ class LoraHyperparameters:
     init_lora_weights: Union[bool, str, None] = True # ["gaussian", "eva", "olora", "pissa", "pissa_niter_[number of iters]", "corda", "loftq", "orthogonal"]
     init_num_samples: int = 512
     init_batch_size: int = 8
-    corda_method: str = "kpm"  # kpm or ipm, only used if init_lora_weights is "corda"
+    corda_method: str = "kpm"  # kpm or ipm
 
-@dataclass
-class ModelConfig:
-    """Base model loading parameters."""
+    loraga_direction : str = "ArB2r"  # ArB2r, A2rB, BrA2r
+    loraga_dtype : torch.dtype = torch.float32
 
-    base_model: str = "meta-llama/Llama-3.1-8B"
-    attn_implementation: Optional[str] = "sdpa"
-    torch_dtype = torch.float32
-    load_in_4bit: bool = False
-    load_in_8bit: bool = False
-    trust_remote_code: bool = True
-    gradient_checkpointing: bool = False
-    pad_token: str = "<|pad|>"
-    device_map: Optional[str] = None
+    cache_dir: Optional[str] = "data_cache"
+    unique_cache_filename : Optional[str] = None
+    model_name_or_path: Optional[str] = None
+    dataset_name: Optional[str] = None
+    subdataset_name: Optional[str] = None
+    init_seed: int = 10086
+    adapter_name: Optional[str] = "default"
+
+    def __post_init__(self):
+        unique_cache_filename = f"{self.model_name_or_path.replace('/', '-')}_{self.dataset_name}"
+        if self.subdataset_name:
+            unique_cache_filename += f"_{self.subdataset_name}"
+        self.unique_cache_filename = f"{unique_cache_filename}_r{self.r}_dp{self.init_num_samples}_bs{self.init_batch_size}_{self.init_seed}.pt"
+    
+    def get_unique_cache_path(self,path_mid_name) -> str:
+        parent_path = Path(self.cache_dir, path_mid_name)
+        if not parent_path.exists():
+            parent_path.mkdir(parents=True, exist_ok=True)
+        return parent_path.joinpath(self.unique_cache_filename).as_posix()
 
 _VARIANT_TO_FLAGS = {
     "lora": {"use_dora": False, "use_rslora": False, "use_qalora": False},
@@ -55,85 +67,83 @@ _VARIANT_TO_FLAGS = {
     "qalora": {"use_dora": False, "use_rslora": False, "use_qalora": True},
 }
 
-def _maybe_quant_config(model_cfg: ModelConfig):
-    if BitsAndBytesConfig is None:
-        return None
-    if model_cfg.load_in_4bit:
-        return BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_compute_dtype=torch.bfloat16,
-            bnb_4bit_use_double_quant=True,
-            bnb_4bit_quant_type="nf4",
-        )
-    if model_cfg.load_in_8bit:
-        return BitsAndBytesConfig(load_in_8bit=True)
-    return None
 
+def build_LoraHyperparameters_from_yaml_dict(cfg_dict) -> LoraHyperparameters:
+    peft_config = cfg_dict.get("peft", {})
+    loraga_config = cfg_dict.get("loraga", {})
+    return LoraHyperparameters(
+        variant= peft_config['variant'],
+        r= peft_config['lora_r'],
+        alpha= peft_config['lora_alpha'],
+        dropout= peft_config['lora_dropout'],
+        bias= peft_config['bias'],
+        target_modules= peft_config['target_modules'],
+        init_lora_weights= peft_config['init_lora_weights'],
+        init_num_samples= peft_config.get('init_num_samples', 512),
+        init_batch_size= peft_config.get('init_batch_size', 8),
 
-def load_tokenizer(model_cfg: ModelConfig):
-    tokenizer = AutoTokenizer.from_pretrained(
-        model_cfg.base_model,
-        trust_remote_code=model_cfg.trust_remote_code,
-        padding_side="left",
+        corda_method= peft_config.get('corda_method', "kpm"),
+        loraga_direction= loraga_config.get('direction', "ArB2r") if loraga_config else "ArB2r",
+        loraga_dtype= torch.float32,
+        
+        cache_dir= peft_config.get('cache_dir', "data_cache"),
+        model_name_or_path= cfg_dict["model"]["name_or_path"],
+        dataset_name= cfg_dict["dataset"]["name"],
+        subdataset_name= cfg_dict["dataset"].get("subset", None),
+        init_seed= peft_config.get('init_seed') if peft_config.get('init_seed') else cfg_dict['training'].get("seed", 42) *2 +1,
+        adapter_name= peft_config.get('adapter_name', "default"),
     )
-    if tokenizer.pad_token_id is None:
-        tokenizer.add_special_tokens({"pad_token": model_cfg.pad_token})
-    tokenizer.pad_token = tokenizer.pad_token or model_cfg.pad_token
-    return tokenizer
 
-
-def load_base_model(model_cfg: ModelConfig):
-    quantization_config = _maybe_quant_config(model_cfg)
-    dtype = model_cfg.torch_dtype
-    model = AutoModelForCausalLM.from_pretrained(
-        model_cfg.base_model,
-        attn_implementation=model_cfg.attn_implementation,
-        trust_remote_code=model_cfg.trust_remote_code,
-        torch_dtype=None if quantization_config else dtype,
-        device_map=model_cfg.device_map,
-        quantization_config=quantization_config,
-    )
-    if (model_cfg.load_in_4bit or model_cfg.load_in_8bit) and quantization_config is not None:
-        model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=model_cfg.gradient_checkpointing)
-    if model_cfg.gradient_checkpointing:
-        model.gradient_checkpointing_enable()
-        model.config.use_cache = False
-    return model
-
-
-def get_lora_config(lora_cfg: LoraHyperparameters):
+def get_lora_config(lora_cfg: LoraHyperparameters) -> LoraConfig | LoraGAConfig:
     variant = lora_cfg.variant.lower()
     if variant not in _VARIANT_TO_FLAGS:
         raise ValueError(f"Unsupported LoRA variant: {variant}")
+    peft_config = None
+    if lora_cfg.init_lora_weights != "lora_ga":
+        corda_config = None
+        eva_config = None
+        if lora_cfg.init_lora_weights == "corda":
+                corda_config = CordaConfig(
+                    corda_method=lora_cfg.corda_method, # kpm or ipm
+                    cache_file=lora_cfg.get_unique_cache_path("corda_cache"),
+                    covariance_file=lora_cfg.get_unique_cache_path("covariance_file"),
+                )
+        elif lora_cfg.init_lora_weights == "eva":
+            eva_config = EvaConfig()
+
+        peft_config = LoraConfig(
+            r=lora_cfg.r,
+            lora_alpha=lora_cfg.alpha,
+            lora_dropout=lora_cfg.dropout,
+            bias=lora_cfg.bias,
+            target_modules=list(lora_cfg.target_modules),
+            task_type="CAUSAL_LM",
+            init_lora_weights=lora_cfg.init_lora_weights,
+            corda_config=corda_config,
+            eva_config=eva_config,
+            **_VARIANT_TO_FLAGS[variant],
+        )
+        
+    else:
+        peft_config = LoraGAConfig(
+            r=lora_cfg.r,
+            lora_alpha=lora_cfg.alpha,
+            lora_dropout=lora_cfg.dropout,
+            bias=lora_cfg.bias,
+            target_modules=list(lora_cfg.target_modules),
+            task_type="CAUSAL_LM",
+            bsz=lora_cfg.init_batch_size,
+            direction=lora_cfg.loraga_direction,
+            dtype= lora_cfg.loraga_dtype,
+            gradient_save_path=lora_cfg.get_unique_cache_path("loraga_gradient"),
+            **_VARIANT_TO_FLAGS[variant],
+        )
     
-    corda_config = None
-    eva_config = None
-    if lora_cfg.init_lora_weights == "corda":
-            corda_config = CordaConfig(
-                corda_method=lora_cfg.corda_method, # kpm or ipm
-            )
-    elif lora_cfg.init_lora_weights == "eva":
-        eva_config = EvaConfig()
-
-    peft_config = LoraConfig(
-        r=lora_cfg.r,
-        lora_alpha=lora_cfg.alpha,
-        lora_dropout=lora_cfg.dropout,
-        bias=lora_cfg.bias,
-        target_modules=list(lora_cfg.target_modules),
-        task_type="CAUSAL_LM",
-        init_lora_weights=lora_cfg.init_lora_weights,
-        corda_config=corda_config,
-        eva_config=eva_config,
-        **_VARIANT_TO_FLAGS[variant],
-    )
-
     return peft_config
 
-def attach_lora_adapter(base_model,lora_cfg: LoraConfig, train_dataset,tokenizer, init_num_samples:int, batch_size:int,seed: int,accelerator):
-    if lora_cfg.init_lora_weights not in ["corda", "eva"]:
+def attach_lora_adapter(base_model,lora_cfg: LoraConfig|LoraGAConfig, train_dataset,tokenizer, init_num_samples:int, batch_size:int,seed: int, accelerator: Accelerator, save_dir: Path = None):
+    if lora_cfg.init_lora_weights not in ["corda", "eva", "lora_ga"]:
         return get_peft_model(base_model, lora_cfg)
-    base_model = accelerator.prepare(base_model)
     sub_dataset = train_dataset.shuffle(seed=seed).select(range(init_num_samples))
     # data_collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
     columns_to_keep = ["input_ids", "attention_mask", "labels"]
@@ -147,20 +157,23 @@ def attach_lora_adapter(base_model,lora_cfg: LoraConfig, train_dataset,tokenizer
     )
 
     if lora_cfg.init_lora_weights == "corda":
-        return get_peft_model_with_corda(base_model, lora_cfg, sub_dataset,data_collator)
+        return get_peft_model_with_corda(base_model, lora_cfg, sub_dataset,data_collator,accelerator=accelerator)
     elif lora_cfg.init_lora_weights == "eva":
-        return get_peft_model_with_eva(base_model, lora_cfg, sub_dataset,data_collator ,batch_size,accelerator)
+        return get_peft_model_with_eva(base_model, lora_cfg, sub_dataset,data_collator ,batch_size ,accelerator=accelerator)
+    elif lora_cfg.init_lora_weights == "lora_ga":
+        return get_peft_model_with_lora_ga(base_model, lora_cfg, sub_dataset,data_collator ,batch_size,accelerator=accelerator)
 
-def get_peft_model_with_corda(base_model,lora_cfg: LoraConfig,sub_dataset,data_collator):
+def get_peft_model_with_corda(base_model,lora_cfg: LoraConfig,sub_dataset,data_collator,accelerator: Accelerator):
     calib_loader = DataLoader(
         sub_dataset,
         batch_size=1,
         shuffle=False,
         collate_fn=data_collator,
     )
-
+    base_model.to(accelerator.device)
     device = base_model.device
     print(f"Running Corda preprocessing on device: {device}")
+    #calib_loader = accelerator.prepare(calib_loader)
 
     @torch.no_grad()
     def _run_model():
@@ -189,7 +202,7 @@ def get_peft_model_with_eva(
         sub_dataset,
         data_collator,
         batch_size: int,
-        accelerator
+        accelerator: Accelerator,
     ):
     
     def get_input(examples):
@@ -202,11 +215,13 @@ def get_peft_model_with_eva(
         batch_size=batch_size,
         collate_fn=get_input,
     )
-    accelerator.prepare(dataloader)
+    dataloader = accelerator.prepare(dataloader)
+    base_model.to(accelerator.device)
 
     peft_model = get_peft_model(base_model, lora_cfg, low_cpu_mem_usage=True)
     print(f"Initializing Eva LoRA weights... with sub-dataset of size {len(sub_dataset)}")
     initialize_lora_eva_weights(peft_model, dataloader)
+    freeze_lora_A_weights(peft_model)
     return peft_model
 
 __all__ = [
@@ -214,3 +229,47 @@ __all__ = [
     "load_tokenizer",
     "get_lora_config",
 ]
+
+
+def freeze_lora_A_weights(peft_model):
+    for name, param in peft_model.named_parameters():
+        if "lora_A" in name:
+            param.requires_grad = False
+
+def get_peft_model_with_lora_ga(
+        model,
+        lora_ga_cfg: LoraGAConfig,
+        sub_dataset,
+        data_collator,
+        batch_size: int,
+        accelerator,
+    ):
+
+    from my_peft.utils.lora_ga_utils import (
+                LoraGAContext,
+                estimate_gradient,
+            )
+    from my_peft import get_peft_model as my_get_peft_model
+
+    gradient_loader = DataLoader(
+        dataset=sub_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        collate_fn=data_collator,
+    )
+    named_grad = estimate_gradient(
+        model=model,
+        dataloader=gradient_loader,
+        accelerator=accelerator,
+        quant_flag=False,
+        origin_type=None,
+        quant_type=None,
+        no_split_module_classes=None,
+        grad_save_path=lora_ga_cfg.gradient_save_path,
+    )
+    start_time = time.time()
+    with LoraGAContext(model=model, named_grad=named_grad):
+        model = my_get_peft_model(model=model, peft_config=lora_ga_cfg)
+    logger.info(f"LoRA-GA initialization took {time.time() - start_time:.2f} seconds")
+    
+    return model

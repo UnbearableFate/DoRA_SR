@@ -19,6 +19,6 @@ def inspect_safetensors_file(state_dict):
 
 if __name__ == "__main__":
     # The user wants to inspect a specific file.
-    file_to_inspect = "outputs/test/Qwen3-1.7B/R32/Qwen3-1.7B_r32_alpha64_True_rslora_normal_seed42/checkpoint-40/adapter_model.safetensors"
+    file_to_inspect = "/work/xg24i002/x10041/DoRA_SR/commonsense_reasoning/outputs/Qwen3-8B/3/Qwen3-8B_r16_alpha1_True_lora_sr-init_s17_20251203235027/adapter_model.safetensors"
     state_dict = load_file(file_to_inspect, device="cpu")
     inspect_safetensors_file(state_dict)

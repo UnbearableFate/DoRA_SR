@@ -20,3 +20,5 @@ wandb/
 **/outputs
 **/*.o*
 **/experiment
+**/data_cache
+**/checkpoints
