@@ -72,8 +72,8 @@ mpirun --mca mpi_abort_print_stack 1 \
                     --save_step=100 \
                     --adapter_name=lora \
                     --target_modules="[\"q_proj\",\"k_proj\",\"v_proj\",\"o_proj\",\"gate_proj\",\"up_proj\",\"down_proj\"]" \
-                    --lora_r=16 \
-                    --lora_alpha=1 \
+                    --lora_r=32 \
+                    --lora_alpha=2 \
                     --lora_dropout=0.0 \
                     --bf16 \
                     --init_lora_weights=True \
@@ -123,13 +123,13 @@ mpirun --mca mpi_abort_print_stack 1 \
                     --save_step=100 \
                     --adapter_name=lora \
                     --target_modules="[\"q_proj\",\"k_proj\",\"v_proj\",\"o_proj\",\"gate_proj\",\"up_proj\",\"down_proj\"]" \
-                    --lora_r=16 \
-                    --lora_alpha=1 \
+                    --lora_r=32 \
+                    --lora_alpha=2 \
                     --lora_dropout=0.0 \
                     --bf16 \
                     --init_lora_weights=True \
                     --timestamp='"${timestamp}"' \
-                    --seed=42 \
+                    --seed=43 \
                     --wandb_project=cs_llama \
                     --enable_torch_compile \
                     --sr_init_steps=320 \
@@ -174,8 +174,8 @@ mpirun --mca mpi_abort_print_stack 1 \
                     --save_step=100 \
                     --adapter_name=lora \
                     --target_modules="[\"q_proj\",\"k_proj\",\"v_proj\",\"o_proj\",\"gate_proj\",\"up_proj\",\"down_proj\"]" \
-                    --lora_r=16 \
-                    --lora_alpha=1 \
+                    --lora_r=32 \
+                    --lora_alpha=2 \
                     --lora_dropout=0.0 \
                     --bf16 \
                     --init_lora_weights=True \

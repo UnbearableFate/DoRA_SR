@@ -6,8 +6,6 @@
 # distribution of this software and related documentation without an express
 # license agreement from NVIDIA CORPORATION is strictly prohibited.
 
-from copy import deepcopy
-import gc
 import os
 import sys
 import time
@@ -18,7 +16,7 @@ import torch
 import transformers
 from datasets import load_dataset
 from typing import List, Optional, Union
-
+from trainer.sr_init_trainer import restart_init_train 
 import wandb
 
 """
@@ -28,19 +26,14 @@ import bitsandbytes as bnb
 """
 sys.path.append(os.path.join(os.getcwd(), "peft/src/"))
 from peft import (  # noqa: E402
-    LoraConfig,
-    LoraRuntimeConfig,
-    PrefixTuningConfig,
-    get_peft_model,
-    get_peft_model_state_dict,
-    prepare_model_for_kbit_training,
     set_peft_model_state_dict,
 )
-from transformers import AutoModelForCausalLM, AutoTokenizer, LlamaTokenizer, AutoModel  # noqa: F402
+from transformers import AutoModelForCausalLM, AutoTokenizer, LlamaTokenizer, AutoModel, Trainer  # noqa: F402
 from accelerate import Accelerator ,DistributedType
 
 from SpectralRefactorTrainer import SpectralRefactorTrainer
 from NewTrainer import NewTrainer
+from trainer.rr_trainer import DistributedSvdRefactorRestartTrainer 
 
 def seed_everything(seed: int):
     import random, os
@@ -109,14 +102,11 @@ def train(
         disable_flash_sdpa: bool = False,  # disable Flash SDPA if needed
         enable_torch_compile: bool = False,  # enable after confirming stability
         #trainer
-        use_sr_trainer: bool = False,
-        sr_init_only: bool = True,
         sr_init_steps: float = 320,
-        sr_init_clear_b: bool = True,
-        sr_init_momentum_map: bool = False,
-        sr_warmup_steps: int = 0,
-        sr_cooldown_steps: int = 0,
-        sr_refactor_every: int = 103,
+        adjust_lora_alpha: int = 0,
+        do_refactor: bool = True,
+        min_alpha_ratio: float = 0.8,
+        max_alpha_ratio: float = 1.6,
 ):
     # Configure SDPA backends for bf16 stability
     # https://docs.pytorch.org/docs/stable/generated/torch.nn.functional.scaled_dot_product_attention.html
@@ -131,47 +121,6 @@ def train(
     
     accelerator = Accelerator()
     if accelerator.is_main_process:
-        print(
-            f"Finetuning model with params:\n"
-            f"base_model: {base_model}\n"
-            f"data_path: {data_path}\n"
-            f"output_dir: {output_dir}\n"
-            f"batch_size: {batch_size}\n"
-            f"per_device_train_batch_size: {per_device_train_batch_size}\n"
-            f"num_epochs: {num_epochs}\n"
-            f"learning_rate: {learning_rate}\n"
-            f"cutoff_len: {cutoff_len}\n"
-            f"val_set_size: {val_set_size}\n"
-            f"use_gradient_checkpointing: {use_gradient_checkpointing}\n"
-            f"lora_r: {lora_r}\n"
-            f"lora_alpha: {lora_alpha}\n"
-            f"lora_dropout: {lora_dropout}\n"
-            f"Wdecompose_target_modules: {Wdecompose_target_modules}\n"
-            f"dora_simple: {dora_simple}"
-            f"bottleneck_size: {bottleneck_size}\n"
-            f"non_linearity: {non_linearity}\n"
-            f"adapter_dropout: {adapter_dropout}\n"
-            f"use_parallel_adapter: {use_parallel_adapter}\n"
-            f"use_adapterp: {use_adapterp}\n"
-            f"train_on_inputs: {train_on_inputs}\n"
-            f"scaling: {scaling}\n"
-            f"adapter_name: {adapter_name}\n"
-            f"target_modules: {target_modules}\n"
-            f"group_by_length: {group_by_length}\n"
-            f"wandb_project: {wandb_project}\n"
-            f"wandb_online: {wandb_online}\n"
-            f"resume_from_checkpoint: {resume_from_checkpoint}\n"
-            f"seed: {seed}\n"
-            f"bf16: {bf16}\n"
-            f"attn_implementation: {attn_implementation}\n"
-            f"disable_cudnn_sdpa: {disable_cudnn_sdpa}\n"
-            f"enable_torch_compile: {enable_torch_compile}\n"
-            f"use_sr_trainer: {use_sr_trainer}\n"
-            f"sr_init_only: {sr_init_only}\n"
-            f"sr_init_steps: {sr_init_steps}\n"
-            f"sr_init_clear_b: {sr_init_clear_b}\n"
-            f"sr_init_momentum_map: {sr_init_momentum_map}\n"
-        )
         print(accelerator.state)
 
     assert (
@@ -186,10 +135,10 @@ def train(
 
     tags = [base_model.split("/")[-1], adapter_name, f"bs{batch_size}",f'lr{learning_rate}',f"lora_r{lora_r}", f"lora_alpha{lora_alpha}", f"seed{seed}"]
     wandb_run_name = f"{base_model.split('/')[-1]}_r{lora_r}_alpha{lora_alpha}_{init_lora_weights}_{adapter_name}"
-    if use_sr_trainer:
+    if do_refactor:
         wandb_run_name += "_sr-init"
-        if not sr_init_only:
-            wandb_run_name += "&train"
+    if adjust_lora_alpha == 1:
+        wandb_run_name += f"&alpha{min_alpha_ratio}~{max_alpha_ratio}@start"
     wandb_run_name += f"_s{seed}_{timestamp}"
     output_dir = os.path.join(output_dir,base_model.split('/')[-1],f"R{lora_r}",wandb_run_name)
     
@@ -322,7 +271,7 @@ def train(
     
     lora_hyperparams = LoraHyperparameters(
         variant=adapter_name,
-        r=lora_r if not use_sr_trainer else lora_r * 2,
+        r=lora_r,
         alpha=lora_alpha,
         dropout=lora_dropout,
         bias="none",
@@ -420,73 +369,31 @@ def train(
             ),
         }
     
-    if use_sr_trainer:
-        if accelerator.is_main_process:
-            print(f"Using SpectralRefactorTrainer, refactor_every=100, balance_lambda=0.8")
-        training_arguments0 = deepcopy(common_args["args"])
-        training_arguments0.num_train_epochs = 0
-        training_arguments0.max_steps = sr_init_steps
-        training_arguments0.output_dir = os.path.join(output_dir,"initial_phase")
-        training_arguments0.report_to = "none"
-        training_arguments0.eval_strategy = "no"
-        training_arguments0.save_strategy = "no"
-        training_arguments0.load_best_model_at_end = False
-        training_arguments0.data_seed = seed * 2 + 1  # to avoid mixing data orders
-        trainer0 = NewTrainer(
-            model = model,
-            train_dataset = train_data,
-            eval_dataset = None,
-            args = training_arguments0,
-            data_collator = common_args["data_collator"],
-            rebuid_lora = True,
-        )
-        trainer0.train(resume_from_checkpoint=resume_from_checkpoint)
-        
-        # Synchronize before rank distribution
-        accelerator.wait_for_everyone()
+    '''
+    model = restart_init_train(
+        trainning_args = common_args['args'],
+        init_steps = sr_init_steps,
+        model = model,
+        data_collator= common_args['data_collator'],
+        train_dataset = common_args['train_dataset'],
+        adjust_lora_alpha= False,
+        min_alpha_ratio= min_alpha_ratio,
+        max_alpha_ratio= max_alpha_ratio,
+    )
+    '''
 
-        trainer0.init_lora_weight(adjust_alpha=True, beta=0.25, clip_ratio=1.25)
-        """
-        # Compute rank pattern on main process
-        if accelerator.is_main_process:
-            rank_pattern, alpha_pattern , lora_A, lora_B = trainer0.lora_rank_distribution_and_init_weight(target_rank=lora_r)
-            print(f"Rank pattern and initial LoRA weights computed. \n\n rank_pattern \n {rank_pattern} \n\n alpha_pattern \n {alpha_pattern} \n")
-        
-        if accelerator.is_main_process:
-            # Pack data on main process
-            data_to_broadcast = [rank_pattern,alpha_pattern, lora_A, lora_B]
-        else:
-            data_to_broadcast = [None,None, None, None]
-        
-        # Broadcast from rank 0 to all processes
-        from torch.distributed import broadcast_object_list
-        broadcast_object_list(data_to_broadcast, src=0)
-        rank_pattern,alpha_pattern, lora_A, lora_B = data_to_broadcast
-        
-        if rank_pattern is not None:
-            # All processes reload base model
-            # Apply LoRA weights on all processes
-            model = NewTrainer.rebuid_lora_weights(
-                model=model,
-                rank_pattern=rank_pattern,
-                alpha_pattern=alpha_pattern,
-                lora_A=lora_A,
-                lora_B=lora_B,
-                lora_config=lora_config,
-            )
-        common_args["model"] = model
-        """
-        trainer = SpectralRefactorTrainer(
-            **common_args,
-            refactor_every = 10300000 if sr_init_only else sr_refactor_every,
-            balance_lambda = 0.8,
-            warmup_steps = sr_warmup_steps,
-            cooldown_steps = sr_cooldown_steps,
-        )
-    else:
-        trainer = transformers.Trainer(
-            **common_args,
-        )
+    common_args['model'] = restart_init_train(
+        trainning_args = common_args['args'],
+        init_steps = sr_init_steps,
+        model = model,
+        data_collator= common_args['data_collator'],
+        train_dataset = common_args['train_dataset'],
+        adjust_lora_alpha= bool(adjust_lora_alpha >= 1),
+        min_alpha_ratio= min_alpha_ratio,
+        max_alpha_ratio= max_alpha_ratio,
+    )
+    
+    trainer = Trainer(**common_args)
         
     model.config.use_cache = False
 

@@ -2,7 +2,7 @@
 #PBS -q regular-g
 #PBS -W group_list=xg24i002
 #PBS -l select=1:mpiprocs=1
-#PBS -l walltime=03:00:00
+#PBS -l walltime=06:00:00
 #PBS -j oe
 #PBS -m abe
 
@@ -11,7 +11,7 @@ set -euo pipefail
 cd /work/xg24i002/x10041/DoRA_SR/commonsense_reasoning
 
 PYTHON_PATH="/work/xg24i002/x10041/lora-ns/.venv/bin/"
-LORA_WEIGHT="/work/xg24i002/x10041/DoRA_SR/commonsense_reasoning/outputs/gemma-7b/R16/1"
+LORA_WEIGHT="/work/xg24i002/x10041/DoRA_SR/commonsense_reasoning/outputs/gemma-7b/R32/0"
 
 export HF_HOME="/work/xg24i002/x10041/hf_home"
 export HF_DATASETS_CACHE="/work/xg24i002/x10041/data"

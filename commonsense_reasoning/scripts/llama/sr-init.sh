@@ -55,12 +55,12 @@ mpirun --mca mpi_abort_print_stack 1 \
                 export HF_HOME='"${HF_HOME}"'; \
                 export HF_DATASETS_CACHE='"${HF_DATASETS_CACHE}"'; \
                 echo "Running on rank $RANK out of $WORLD_SIZE"; \
-                '"${PYTHON_PATH}"' my_finetune_test.py\
+                '"${PYTHON_PATH}"' my_finetune_init_only.py  \
                     --base_model=meta-llama/Llama-3.1-8B \
                     --data_path=/work/xg24i002/x10041/LLM-Adapters/ft-training_set/commonsense_170k.json \
                     --output_dir=./outputs/ \
                     --batch_size=32 \
-                    --per_device_train_batch_size=1 \
+                    --per_device_train_batch_size=2 \
                     --num_epochs=1 \
                     --learning_rate=5e-4 \
                     --lr_scheduler_type=linear \
@@ -79,15 +79,13 @@ mpirun --mca mpi_abort_print_stack 1 \
                     --init_lora_weights=True \
                     --timestamp='"${timestamp}"' \
                     --seed=17 \
-                    --wandb_project=cs_minis \
-                    --use_sr_trainer \
-                    --sr_init_only=True \
+                    --wandb_project=cs_llama \
+                    --enable_torch_compile \
                     --sr_init_steps=320 \
-                    --sr_init_clear_b=False \
-                    --sr_cooldown_steps=500 \
-                    --sr_refactor_every=101 \
-                    --sr_init_momentum_map=False \
-                    --enable_torch_compile '
+                    --adjust_lora_alpha=0 \
+                    --min_alpha_ratio=0.75 \
+                    --max_alpha_ratio=1.5 \
+                    '
 
 timestamp=$(date +%Y%m%d_%H%M%S)
 mpirun --mca mpi_abort_print_stack 1 \
@@ -109,10 +107,10 @@ mpirun --mca mpi_abort_print_stack 1 \
                 export HF_HOME='"${HF_HOME}"'; \
                 export HF_DATASETS_CACHE='"${HF_DATASETS_CACHE}"'; \
                 echo "Running on rank $RANK out of $WORLD_SIZE"; \
-                '"${PYTHON_PATH}"' my_finetune_test.py\
+                '"${PYTHON_PATH}"' my_finetune_init_only.py  \
                     --base_model=meta-llama/Llama-3.1-8B \
                     --data_path=/work/xg24i002/x10041/LLM-Adapters/ft-training_set/commonsense_170k.json \
-                    --output_dir=./outputs \
+                    --output_dir=./outputs/ \
                     --batch_size=32 \
                     --per_device_train_batch_size=2 \
                     --num_epochs=1 \
@@ -134,14 +132,12 @@ mpirun --mca mpi_abort_print_stack 1 \
                     --timestamp='"${timestamp}"' \
                     --seed=42 \
                     --wandb_project=cs_llama \
-                    --use_sr_trainer \
-                    --sr_init_only=True \
+                    --enable_torch_compile \
                     --sr_init_steps=320 \
-                    --sr_init_clear_b=False \
-                    --sr_cooldown_steps=500 \
-                    --sr_refactor_every=101 \
-                    --sr_init_momentum_map=False \
-                    --enable_torch_compile '
+                    --adjust_lora_alpha=0 \
+                    --min_alpha_ratio=0.75 \
+                    --max_alpha_ratio=1.5 \
+                    '
 
 timestamp=$(date +%Y%m%d_%H%M%S)
 mpirun --mca mpi_abort_print_stack 1 \
@@ -163,10 +159,10 @@ mpirun --mca mpi_abort_print_stack 1 \
                 export HF_HOME='"${HF_HOME}"'; \
                 export HF_DATASETS_CACHE='"${HF_DATASETS_CACHE}"'; \
                 echo "Running on rank $RANK out of $WORLD_SIZE"; \
-                '"${PYTHON_PATH}"' my_finetune_test.py\
+                '"${PYTHON_PATH}"' my_finetune_init_only.py  \
                     --base_model=meta-llama/Llama-3.1-8B \
                     --data_path=/work/xg24i002/x10041/LLM-Adapters/ft-training_set/commonsense_170k.json \
-                    --output_dir=./outputs \
+                    --output_dir=./outputs/ \
                     --batch_size=32 \
                     --per_device_train_batch_size=2 \
                     --num_epochs=1 \
@@ -188,11 +184,9 @@ mpirun --mca mpi_abort_print_stack 1 \
                     --timestamp='"${timestamp}"' \
                     --seed=59 \
                     --wandb_project=cs_llama \
-                    --use_sr_trainer \
-                    --sr_init_only=True \
+                    --enable_torch_compile \
                     --sr_init_steps=320 \
-                    --sr_init_clear_b=False \
-                    --sr_cooldown_steps=500 \
-                    --sr_refactor_every=101 \
-                    --sr_init_momentum_map=False \
-                    --enable_torch_compile '
+                    --adjust_lora_alpha=0 \
+                    --min_alpha_ratio=0.75 \
+                    --max_alpha_ratio=1.5 \
+                    '

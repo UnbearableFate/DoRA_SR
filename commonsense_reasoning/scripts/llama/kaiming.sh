@@ -2,7 +2,7 @@
 #PBS -q regular-g
 #PBS -W group_list=xg24i002
 #PBS -l select=16:mpiprocs=1
-#PBS -l walltime=03:00:00
+#PBS -l walltime=04:00:00
 #PBS -j oe
 #PBS -m abe
 
@@ -55,12 +55,12 @@ mpirun --mca mpi_abort_print_stack 1 \
                 export HF_HOME='"${HF_HOME}"'; \
                 export HF_DATASETS_CACHE='"${HF_DATASETS_CACHE}"'; \
                 echo "Running on rank $RANK out of $WORLD_SIZE"; \
-                '"${PYTHON_PATH}"' my_finetune_test.py\
+                '"${PYTHON_PATH}"' my_finetune_new.py \
                     --base_model=meta-llama/Llama-3.1-8B \
                     --data_path=/work/xg24i002/x10041/LLM-Adapters/ft-training_set/commonsense_170k.json \
                     --output_dir=./outputs/ \
                     --batch_size=32 \
-                    --per_device_train_batch_size=1 \
+                    --per_device_train_batch_size=2 \
                     --num_epochs=1 \
                     --learning_rate=5e-4 \
                     --lr_scheduler_type=linear \
@@ -72,21 +72,14 @@ mpirun --mca mpi_abort_print_stack 1 \
                     --save_step=100 \
                     --adapter_name=lora \
                     --target_modules="[\"q_proj\",\"k_proj\",\"v_proj\",\"o_proj\",\"gate_proj\",\"up_proj\",\"down_proj\"]" \
-                    --lora_r=16 \
-                    --lora_alpha=1 \
+                    --lora_r=32 \
+                    --lora_alpha=2 \
                     --lora_dropout=0.0 \
                     --bf16 \
-                    --init_lora_weights=olora \
+                    --init_lora_weights=True \
                     --timestamp='"${timestamp}"' \
                     --seed=17 \
-                    --wandb_project=cs_minis \
-                    --use_sr_trainer \
-                    --sr_init_only=True \
-                    --sr_init_steps=320 \
-                    --sr_init_clear_b=False \
-                    --sr_cooldown_steps=500 \
-                    --sr_refactor_every=101 \
-                    --sr_init_momentum_map=False \
+                    --wandb_project=cs_llama \
                     --enable_torch_compile '
 
 timestamp=$(date +%Y%m%d_%H%M%S)
@@ -109,10 +102,10 @@ mpirun --mca mpi_abort_print_stack 1 \
                 export HF_HOME='"${HF_HOME}"'; \
                 export HF_DATASETS_CACHE='"${HF_DATASETS_CACHE}"'; \
                 echo "Running on rank $RANK out of $WORLD_SIZE"; \
-                '"${PYTHON_PATH}"' my_finetune_test.py\
+                '"${PYTHON_PATH}"' my_finetune_new.py \
                     --base_model=meta-llama/Llama-3.1-8B \
                     --data_path=/work/xg24i002/x10041/LLM-Adapters/ft-training_set/commonsense_170k.json \
-                    --output_dir=./outputs \
+                    --output_dir=./outputs/ \
                     --batch_size=32 \
                     --per_device_train_batch_size=2 \
                     --num_epochs=1 \
@@ -126,21 +119,14 @@ mpirun --mca mpi_abort_print_stack 1 \
                     --save_step=100 \
                     --adapter_name=lora \
                     --target_modules="[\"q_proj\",\"k_proj\",\"v_proj\",\"o_proj\",\"gate_proj\",\"up_proj\",\"down_proj\"]" \
-                    --lora_r=16 \
-                    --lora_alpha=1 \
+                    --lora_r=32 \
+                    --lora_alpha=2 \
                     --lora_dropout=0.0 \
                     --bf16 \
-                    --init_lora_weights=olora \
+                    --init_lora_weights=True \
                     --timestamp='"${timestamp}"' \
-                    --seed=42 \
+                    --seed=17 \
                     --wandb_project=cs_llama \
-                    --use_sr_trainer \
-                    --sr_init_only=True \
-                    --sr_init_steps=320 \
-                    --sr_init_clear_b=False \
-                    --sr_cooldown_steps=500 \
-                    --sr_refactor_every=101 \
-                    --sr_init_momentum_map=False \
                     --enable_torch_compile '
 
 timestamp=$(date +%Y%m%d_%H%M%S)
@@ -163,7 +149,7 @@ mpirun --mca mpi_abort_print_stack 1 \
                 export HF_HOME='"${HF_HOME}"'; \
                 export HF_DATASETS_CACHE='"${HF_DATASETS_CACHE}"'; \
                 echo "Running on rank $RANK out of $WORLD_SIZE"; \
-                '"${PYTHON_PATH}"' my_finetune_test.py\
+                '"${PYTHON_PATH}"' my_finetune_new.py \
                     --base_model=meta-llama/Llama-3.1-8B \
                     --data_path=/work/xg24i002/x10041/LLM-Adapters/ft-training_set/commonsense_170k.json \
                     --output_dir=./outputs \
@@ -180,19 +166,59 @@ mpirun --mca mpi_abort_print_stack 1 \
                     --save_step=100 \
                     --adapter_name=lora \
                     --target_modules="[\"q_proj\",\"k_proj\",\"v_proj\",\"o_proj\",\"gate_proj\",\"up_proj\",\"down_proj\"]" \
-                    --lora_r=16 \
-                    --lora_alpha=1 \
+                    --lora_r=32 \
+                    --lora_alpha=2 \
                     --lora_dropout=0.0 \
                     --bf16 \
-                    --init_lora_weights=olora \
+                    --init_lora_weights=True \
                     --timestamp='"${timestamp}"' \
-                    --seed=59 \
+                    --seed=43 \
                     --wandb_project=cs_llama \
-                    --use_sr_trainer \
-                    --sr_init_only=True \
-                    --sr_init_steps=320 \
-                    --sr_init_clear_b=False \
-                    --sr_cooldown_steps=500 \
-                    --sr_refactor_every=101 \
-                    --sr_init_momentum_map=False \
+                    --enable_torch_compile '
+
+timestamp=$(date +%Y%m%d_%H%M%S)
+mpirun --mca mpi_abort_print_stack 1 \
+       --report-bindings \
+       --bind-to core \
+       -np "${WORLD_SIZE}" \
+       /usr/bin/env \
+           MASTER_ADDR="${MASTER_ADDR}" \
+           MASTER_PORT="${MASTER_PORT}" \
+           ACCELERATE_CONFIG_FILE="${ACCELERATE_CONFIG}" \
+       bash -c 'set -euo pipefail; \
+                : "${MASTER_ADDR:?MASTER_ADDR not set}"; \
+                : "${MASTER_PORT:?MASTER_PORT not set}"; \
+                : "${ACCELERATE_CONFIG_FILE:?ACCELERATE_CONFIG_FILE not set}"; \
+                export RANK=$OMPI_COMM_WORLD_RANK; \
+                export WORLD_SIZE=$OMPI_COMM_WORLD_SIZE; \
+                export LOCAL_RANK=$OMPI_COMM_WORLD_LOCAL_RANK; \
+                export LOCAL_WORLD_SIZE=$OMPI_COMM_WORLD_LOCAL_SIZE; \
+                export HF_HOME='"${HF_HOME}"'; \
+                export HF_DATASETS_CACHE='"${HF_DATASETS_CACHE}"'; \
+                echo "Running on rank $RANK out of $WORLD_SIZE"; \
+                '"${PYTHON_PATH}"' my_finetune_new.py \
+                    --base_model=meta-llama/Llama-3.1-8B \
+                    --data_path=/work/xg24i002/x10041/LLM-Adapters/ft-training_set/commonsense_170k.json \
+                    --output_dir=./outputs \
+                    --batch_size=32 \
+                    --per_device_train_batch_size=2 \
+                    --num_epochs=1 \
+                    --learning_rate=5e-4 \
+                    --lr_scheduler_type=linear \
+                    --warmup_step=160 \
+                    --weight_decay=0.0 \
+                    --cutoff_len=512 \
+                    --val_set_size=1024 \
+                    --eval_step=100 \
+                    --save_step=100 \
+                    --adapter_name=lora \
+                    --target_modules="[\"q_proj\",\"k_proj\",\"v_proj\",\"o_proj\",\"gate_proj\",\"up_proj\",\"down_proj\"]" \
+                    --lora_r=32 \
+                    --lora_alpha=2 \
+                    --lora_dropout=0.0 \
+                    --bf16 \
+                    --init_lora_weights=True \
+                    --timestamp='"${timestamp}"' \
+                    --seed=43 \
+                    --wandb_project=cs_llama \
                     --enable_torch_compile '

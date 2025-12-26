@@ -55,13 +55,13 @@ mpirun --mca mpi_abort_print_stack 1 \
                 export HF_HOME='"${HF_HOME}"'; \
                 export HF_DATASETS_CACHE='"${HF_DATASETS_CACHE}"'; \
                 echo "Running on rank $RANK out of $WORLD_SIZE"; \
-                '"${PYTHON_PATH}"' my_finetune_01.py  \
+                '"${PYTHON_PATH}"' my_finetune_init_only.py  \
                     --base_model=Qwen/Qwen3-1.7B \
                     --data_path=/work/xg24i002/x10041/LLM-Adapters/ft-training_set/commonsense_170k.json \
                     --output_dir=./outputs/ \
                     --batch_size=32 \
                     --per_device_train_batch_size=2 \
-                    --num_epochs=0.01 \
+                    --num_epochs=0.005 \
                     --learning_rate=5e-4 \
                     --lr_scheduler_type=linear \
                     --warmup_step=160 \
@@ -72,8 +72,8 @@ mpirun --mca mpi_abort_print_stack 1 \
                     --save_step=100 \
                     --adapter_name=lora \
                     --target_modules="[\"q_proj\",\"k_proj\",\"v_proj\",\"o_proj\",\"gate_proj\",\"up_proj\",\"down_proj\"]" \
-                    --lora_r=16 \
-                    --lora_alpha=1 \
+                    --lora_r=64 \
+                    --lora_alpha=4 \
                     --lora_dropout=0.0 \
                     --bf16 \
                     --init_lora_weights=True \
@@ -83,6 +83,6 @@ mpirun --mca mpi_abort_print_stack 1 \
                     --enable_torch_compile \
                     --sr_init_steps=10 \
                     --adjust_lora_alpha=True \
-                    --do_refactor=False \
-                    --keep_s=False \
-                    --sr_refactor_every=10'
+                    --min_alpha_ratio=0.8 \
+                    --max_alpha_ratio=1.6 \
+                    '
