@@ -8,6 +8,7 @@ import torch.distributed as dist
 from transformers import Trainer, TrainingArguments
 
 import math
+from torch.optim.lr_scheduler import LambdaLR
 
 def smooth_asymmetric_power_ratio_math(
     ratio: float,
@@ -152,10 +153,10 @@ class DistributedSvdRefactorTrainer(Trainer):
         do_refactor: bool = True,
         keep_s: bool = False,
         balance_lambda: float = 0.5,
-        alpha_beta: float = 0.8,
-        alpha_clip_ratio: float = 8,
         variance_ema_decay: float = 0.9,
         basic_alpha: float = 2.0,
+        min_alpha_ratio: float = 0.8,
+        max_alpha_ratio: float = 1.6,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
@@ -167,11 +168,12 @@ class DistributedSvdRefactorTrainer(Trainer):
         self.keep_s = bool(keep_s)
         
         self.balance_lambda = float(balance_lambda)
-        self.alpha_beta = float(alpha_beta)
-        self.alpha_clip_ratio = float(alpha_clip_ratio)
         self.variance_ema_decay = float(variance_ema_decay)
+        self.min_alpha_ratio = float(min_alpha_ratio)
+        self.max_alpha_ratio = float(max_alpha_ratio)
         
         self._last_lr_values = None
+        self._prev_lr_values = None
         self._lr_restart_last_checked_step = -1
         self.alpha_log = {}
         self._variance_ema = {}
@@ -187,7 +189,8 @@ class DistributedSvdRefactorTrainer(Trainer):
         return None
 
     @torch.no_grad()
-    def distributed_low_rank_refactor(self, do_refactor: bool = True ,adjust_lora_alpha: bool = True, keep_s :bool = False):
+    def distributed_low_rank_refactor(self, do_refactor: bool = True ,adjust_lora_alpha: bool = True, keep_s :bool = False,
+                                      min_alpha_ratio: float = 0.8, max_alpha_ratio: float = 1.6):
         is_dist = self.accelerator.num_processes > 1 and dist.is_initialized()
         world_size = self.accelerator.num_processes
         rank = self.accelerator.process_index
@@ -290,7 +293,7 @@ class DistributedSvdRefactorTrainer(Trainer):
                     self._variance_ema[layer_key] = layer_var
             variance_of_layers = dict(self._variance_ema)
 
-        beta_pos, beta_neg, r_low_used, r_high_used = infer_betas_from_ratios(variance_of_layers.values(), 0.8, 1.6)
+        beta_pos, beta_neg, r_low_used, r_high_used = infer_betas_from_ratios(variance_of_layers.values(), min_alpha_ratio, max_alpha_ratio)
 
         if adjust_lora_alpha and variance_of_layers:
             if rank == 0:
@@ -310,11 +313,6 @@ class DistributedSvdRefactorTrainer(Trainer):
                             layer_var = variance_of_layers[layer_key]
                             ratio = layer_var / avg_of_global_variance
                             ratio_new = smooth_asymmetric_power_ratio_math(ratio, beta_pos=beta_pos, beta_neg=beta_neg)
-                            """
-                            ratio_new = ratio ** beta
-                            if clip_ratio is not None and clip_ratio > 0:
-                                ratio_new = max(1.0 / clip_ratio, min(ratio_new, clip_ratio))
-                            """
                             sub_module.lora_alpha[adapter_name] = ratio_new * self.basic_alpha
 
             alpha_values = []
@@ -356,6 +354,7 @@ class DistributedSvdRefactorTrainer(Trainer):
             return False
 
         step = self.state.global_step
+        scheduler_step = getattr(self.lr_scheduler, "last_epoch", step)
         # Avoid double-processing the same optimizer step when using gradient accumulation
         if self._lr_restart_last_checked_step == step:
             return False
@@ -364,21 +363,48 @@ class DistributedSvdRefactorTrainer(Trainer):
         if not hasattr(self.lr_scheduler, "get_last_lr"):
             return False
 
-        try:
-            warmup_steps = self.args.get_warmup_steps(self.state.max_steps)
-        except Exception:
-            warmup_steps = getattr(self.args, "warmup_steps", 0) or 0
-
         current_lrs = list(self.lr_scheduler.get_last_lr())
         if self._last_lr_values is None:
             self._last_lr_values = current_lrs
+            self._prev_lr_values = None
             return False
 
-        # After warmup, cosine with hard restarts is strictly decreasing inside a cycle.
-        # Any lr increase indicates a restart just happened at the previous step.
-        is_restart = step > warmup_steps and any(
-            cur_lr > prev_lr * (1.0 + 1e-12) for cur_lr, prev_lr in zip(current_lrs, self._last_lr_values)
+        # Prefer using LambdaLR's lambda to detect a true "restart" boundary for
+        # get_warmup_restart_then_final_decay_scheduler_ratio():
+        # a restart is when the schedule stops decreasing and starts increasing again.
+        eps = 1e-12
+        try:
+            from torch.optim.lr_scheduler import LambdaLR
+
+            if isinstance(self.lr_scheduler, LambdaLR) and getattr(self.lr_scheduler, "lr_lambdas", None):
+                if scheduler_step >= 2:
+                    is_restart = False
+                    for lr_lambda in self.lr_scheduler.lr_lambdas:
+                        r2 = float(lr_lambda(int(scheduler_step - 2)))
+                        r1 = float(lr_lambda(int(scheduler_step - 1)))
+                        r0 = float(lr_lambda(int(scheduler_step)))
+                        delta_prev = r1 - r2
+                        delta_cur = r0 - r1
+                        if (delta_cur > eps) and (delta_prev <= eps):
+                            is_restart = True
+                            break
+                    self._prev_lr_values = self._last_lr_values
+                    self._last_lr_values = current_lrs
+                    return is_restart
+        except Exception:
+            pass
+
+        # Fallback: detect the point where LR stops decreasing and starts increasing.
+        if self._prev_lr_values is None:
+            self._prev_lr_values = self._last_lr_values
+            self._last_lr_values = current_lrs
+            return False
+
+        is_restart = any(
+            ((cur_lr - prev_lr) > eps) and ((prev_lr - prev2_lr) <= eps)
+            for cur_lr, prev_lr, prev2_lr in zip(current_lrs, self._last_lr_values, self._prev_lr_values)
         )
+        self._prev_lr_values = self._last_lr_values
         self._last_lr_values = current_lrs
         return is_restart
 
@@ -388,29 +414,111 @@ class DistributedSvdRefactorTrainer(Trainer):
 
         if self.optimizer is None:
             return loss
-        
+
+        """
         if step > self.state.max_steps - self.cooldown_steps:
             return loss
         if step < self.refactor_every or (step % self.refactor_every) != 0:
             return loss
-        
-        #if not self._is_lr_restart():
-        #    return loss
-
-        self.distributed_low_rank_refactor(
-            do_refactor = self.do_refactor,
-            adjust_lora_alpha = self.adjust_lora_alpha,
-            keep_s = self.keep_s)
+        """
+        if self._is_lr_restart():
+            print(f"Step {step}: Detected LR restart, performing distributed low-rank refactor...")
+            self.distributed_low_rank_refactor(
+                do_refactor = self.do_refactor,
+                adjust_lora_alpha = self.adjust_lora_alpha,
+                keep_s = self.keep_s,
+                min_alpha_ratio = self.min_alpha_ratio,
+                max_alpha_ratio = self.max_alpha_ratio,
+                )
         
         return loss
 
+    def save_alpha_log(self, filepath: str):
+        if not self.alpha_log or self.accelerator.process_index != 0:
+            return
+        import json
+        with open(filepath, "w") as f:
+            json.dump(self.alpha_log, f, indent=4)
+
+def get_warmup_restart_then_final_decay_scheduler_ratio(
+    optimizer,
+    num_training_steps,
+    repeat_n,
+    repeat_warmup_ratio,
+    repeat_decay_ratio,
+    repeat_end_lr_rate,
+    final_warmup_ratio,
+    min_lr_rate,
+    repeat_decay_type="cosine",
+    final_decay_type="cosine",
+    warmup_start_lr_rate=0.0,
+    last_epoch=-1,
+):
+
+    T = num_training_steps
+
+    repeat_warmup_steps = int(round(repeat_warmup_ratio * T))
+    repeat_decay_steps  = int(round(repeat_decay_ratio  * T))
+    final_warmup_steps  = int(round(final_warmup_ratio  * T))
+
+    cycle_len = repeat_warmup_steps + repeat_decay_steps
+    repeat_total_steps = repeat_n * cycle_len
+
+    def _decay_factor(t, kind):
+        t = min(max(t, 0.0), 1.0)
+        if kind == "linear":
+            return 1.0 - t
+        return 0.5 * (1.0 + math.cos(math.pi * t))
+
+    def lr_lambda(step):
+        step = max(0, min(step, T))
+
+        # repeated phase
+        if step < repeat_total_steps:
+            pos = step % cycle_len
+
+            if pos < repeat_warmup_steps:
+                if repeat_warmup_steps == 0:
+                    return 1.0
+                t = pos / repeat_warmup_steps
+                return warmup_start_lr_rate + (1.0 - warmup_start_lr_rate) * t
+
+            dpos = pos - repeat_warmup_steps
+            if repeat_decay_steps == 0:
+                return repeat_end_lr_rate
+            t = dpos / repeat_decay_steps
+            f = _decay_factor(t, repeat_decay_type)
+            return repeat_end_lr_rate + (1.0 - repeat_end_lr_rate) * f
+
+        # final phase
+        final_pos = step - repeat_total_steps
+        final_total = T - repeat_total_steps
+
+        if final_pos < final_warmup_steps:
+            if final_warmup_steps == 0:
+                return 1.0
+            t = final_pos / final_warmup_steps
+            return warmup_start_lr_rate + (1.0 - warmup_start_lr_rate) * t
+
+        decay_left = final_total - final_warmup_steps
+        if decay_left <= 0:
+            return min_lr_rate
+
+        dpos = final_pos - final_warmup_steps
+        t = dpos / decay_left
+        f = _decay_factor(t, final_decay_type)
+        return min_lr_rate + (1.0 - min_lr_rate) * f
+
+    return LambdaLR(optimizer, lr_lambda, last_epoch=last_epoch)
 
 def restart_init_train(trainning_args:TrainingArguments,
                        init_steps,model:PeftModel| LoraModel,
                         data_collator,
                         train_dataset,
                         adjust_lora_alpha=True,
-                        alpha_beta=0.25) -> PeftModel| LoraModel:
+                        basic_alpha=2.0,
+                        min_alpha_ratio = 0.8,
+                        max_alpha_ratio = 1.6) -> PeftModel| LoraModel:
     training_arguments0 = deepcopy(trainning_args)
     training_arguments0.num_train_epochs = 0
     training_arguments0.max_steps = init_steps
@@ -420,22 +528,17 @@ def restart_init_train(trainning_args:TrainingArguments,
     training_arguments0.save_strategy = "no"
     training_arguments0.load_best_model_at_end = False
     training_arguments0.data_seed = training_arguments0.data_seed* 2 + 1  # to avoid mixing data orders
+    training_arguments0.lr_scheduler_type = "constant_with_warmup"
+    training_arguments0.logging_steps = 10
     trainer0 = DistributedSvdRefactorTrainer(
         model = model,
         train_dataset = train_dataset,
         eval_dataset = None,
         args = training_arguments0,
-        data_collator = data_collator, 
-        refactor_every = 1000000,
-        alpha_beta=alpha_beta,
+        data_collator = data_collator,
+        basic_alpha=basic_alpha,
     )
-    print(f"Starting initial training phase : beta={alpha_beta} ...")
     trainer0.train()
-    trainer0.distributed_low_rank_refactor(adjust_lora_alpha=adjust_lora_alpha, do_refactor=True, keep_s=False)
-    import json
-    try:
-        with open(os.path.join(training_arguments0.output_dir, f"alpha_log_start.json"), "w") as f:
-            json.dump(trainer0.alpha_log, f, indent=4)
-    except Exception as e:
-        print(f"Failed to save alpha log: {e}")
+    trainer0.distributed_low_rank_refactor(adjust_lora_alpha=adjust_lora_alpha, do_refactor=True, keep_s=False, min_alpha_ratio=min_alpha_ratio, max_alpha_ratio=max_alpha_ratio)
+    trainer0.save_alpha_log(os.path.join(training_arguments0.output_dir,"lora_alpha_log.json"))
     return model
