@@ -344,6 +344,28 @@ def train(
 
     print (f"{len(train_data)} training samples")
     max_steps = math.ceil(num_epochs * len(train_data) / batch_size)
+    
+    optimizer = AdamW(
+        params=filter(lambda p: p.requires_grad, model.parameters()),
+        lr=learning_rate,
+        weight_decay=weight_decay,
+    )
+
+    scheduler = get_warmup_restart_then_final_decay_scheduler_ratio(
+        optimizer=optimizer,
+        num_training_steps=max_steps,
+        repeat_n=repeat_n,
+        repeat_warmup_ratio=repeat_warmup_ratio,
+        repeat_decay_ratio=repeat_decay_ratio,
+        repeat_end_lr_rate=repeat_end_lr_rate,
+        final_warmup_ratio=final_warmup_ratio,
+        min_lr_rate=min_lr_rate,
+        repeat_decay_type=repeat_decay_type,
+        final_decay_type=final_decay_type,
+        warmup_start_lr_rate=warmup_start_lr_rate,
+        first_warmup_start_lr_rate=first_warmup_start_lr_rate,
+    )
+
     common_args = {
         "model": model,
         "train_dataset": train_data,
@@ -351,7 +373,7 @@ def train(
         "args": transformers.TrainingArguments(
             per_device_train_batch_size=per_device_train_batch_size,
             gradient_accumulation_steps=gradient_accumulation_steps,
-            lr_scheduler_type=lr_scheduler_type,
+            lr_scheduler_type='linear',  # using custom scheduler
             warmup_steps=warmup_step,
             #num_train_epochs=num_epochs,
             max_steps= max_steps,  # set max_steps to a large number, actual steps controlled by sr_init_steps and trainer
@@ -363,7 +385,7 @@ def train(
             bf16=bf16,
             fp16=False,
             logging_steps=50,
-            optim="adamw_torch",
+            optim="adamw_torch",  # using custom optimizer
             max_grad_norm=1.0,
             eval_strategy="steps" if val_set_size > 0 else "no",
             save_strategy="steps",
@@ -385,47 +407,11 @@ def train(
         "data_collator": transformers.DataCollatorForSeq2Seq(
             tokenizer, pad_to_multiple_of=8, return_tensors="pt", padding=True
             ),
+        "optimizers": (optimizer, scheduler),
         }
     
-    common_args['model'] = restart_init_train(
-        trainning_args = common_args['args'],
-        init_steps = sr_init_steps,
-        model = model,
-        data_collator= common_args['data_collator'],
-        train_dataset = common_args['train_dataset'],
-        adjust_lora_alpha= bool(adjust_lora_alpha >= 1),
-        basic_alpha= lora_alpha,
-        min_alpha_ratio= min_alpha_ratio,
-        max_alpha_ratio= max_alpha_ratio,
-    )
-
-    optimizer = AdamW(
-        params=filter(lambda p: p.requires_grad, model.parameters()),
-        lr=learning_rate,
-        weight_decay=weight_decay,
-    )
-
-    scheduler = get_warmup_restart_then_final_decay_scheduler_ratio(
-        optimizer=optimizer,
-        num_training_steps=max_steps,
-        repeat_n=repeat_n,
-        repeat_warmup_ratio=repeat_warmup_ratio,
-        repeat_decay_ratio=repeat_decay_ratio,
-        repeat_end_lr_rate=repeat_end_lr_rate,
-        final_warmup_ratio=final_warmup_ratio,
-        min_lr_rate=min_lr_rate,
-        repeat_decay_type=repeat_decay_type,
-        final_decay_type=final_decay_type,
-        warmup_start_lr_rate=warmup_start_lr_rate,
-        first_warmup_start_lr_rate=first_warmup_start_lr_rate,
-    )
-    
-    common_args["args"].optim = None
-    common_args["args"].lr_scheduler_type = None
-
     trainer = DistributedSvdRefactorTrainer(
         **common_args, 
-        optimizers=(optimizer, scheduler),
         adjust_lora_alpha= bool(adjust_lora_alpha == 2), 
         do_refactor=True,
         keep_s=keep_s,

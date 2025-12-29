@@ -2,13 +2,13 @@
 
 cd commonsense_reasoning
 
-python my_finetune_go.py  \
+python my_finetune_go2.py  \
     --base_model=Qwen/Qwen3-1.7B \
     --data_path=/home/yu/workspace/LLM-Adapters/ft-training_set/commonsense_170k.json \
     --output_dir=./outputs/ \
     --batch_size=32 \
     --per_device_train_batch_size=2 \
-    --num_epochs=0.005 \
+    --num_epochs=0.1 \
     --learning_rate=5e-4 \
     --lr_scheduler_type=linear \
     --warmup_step=160 \
@@ -31,6 +31,7 @@ python my_finetune_go.py  \
     --sr_init_steps=10 \
     --adjust_lora_alpha=1 \
     --do_refactor=True \
-    --keep_s=True \
+    --Keep_s=False \
+    --repeat_n=3 \
     --min_alpha_ratio=0.8 \
     --max_alpha_ratio=1.6 \

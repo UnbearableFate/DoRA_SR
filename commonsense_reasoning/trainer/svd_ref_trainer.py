@@ -175,6 +175,7 @@ class DistributedSvdRefactorTrainer(Trainer):
         self._last_lr_values = None
         self._prev_lr_values = None
         self._lr_restart_last_checked_step = -1
+        self._refactor_times = 0
         self.alpha_log = {}
         self._variance_ema = {}
         self.basic_alpha = float(basic_alpha)
@@ -188,8 +189,28 @@ class DistributedSvdRefactorTrainer(Trainer):
                     return self.optimizer.state.get(p, {}).get("exp_avg", None)
         return None
 
+    def _zero_adam_moments_for_param(self, param: Tensor) -> None:
+        if not hasattr(self, "optimizer") or self.optimizer is None:
+            return
+        for group in self.optimizer.param_groups:
+            for p in group["params"]:
+                if p is param:
+                    state = self.optimizer.state.get(p, None)
+                    if not state:
+                        return
+                    exp_avg = state.get("exp_avg", None)
+                    if exp_avg is not None:
+                        exp_avg.zero_()
+                    exp_avg_sq = state.get("exp_avg_sq", None)
+                    if exp_avg_sq is not None:
+                        exp_avg_sq.zero_()
+                    max_exp_avg_sq = state.get("max_exp_avg_sq", None)
+                    if max_exp_avg_sq is not None:
+                        max_exp_avg_sq.zero_()
+                    return
+
     @torch.no_grad()
-    def distributed_low_rank_refactor(self, do_refactor: bool = True ,adjust_lora_alpha: bool = True, keep_s :bool = False,
+    def distributed_low_rank_refactor(self, do_refactor: bool = True ,adjust_lora_alpha: bool = True, keep_s :bool = False, keep_momentum: bool = True,
                                       min_alpha_ratio: float = 0.8, max_alpha_ratio: float = 1.6):
         is_dist = self.accelerator.num_processes > 1 and dist.is_initialized()
         world_size = self.accelerator.num_processes
@@ -211,8 +232,11 @@ class DistributedSvdRefactorTrainer(Trainer):
             if device_for_broadcast is None:
                 device_for_broadcast = B.device
 
-            mB_state = self.get_exp_avg(B)
-            mA_state = self.get_exp_avg(A)
+            mB_state = None
+            mA_state = None
+            if keep_momentum:
+                mB_state = self.get_exp_avg(B)
+                mA_state = self.get_exp_avg(A)
 
             if compute_here:
                 # 始终对 B @ A 做 SVD，作为正交基
@@ -346,6 +370,12 @@ class DistributedSvdRefactorTrainer(Trainer):
                     sub_module.set_scale(adapter_name, 1.0)  # 更新 scale
                     self.alpha_log[f"{module_name}.{adapter_name}"].append(sub_module.lora_alpha[adapter_name])
 
+        if not keep_momentum:
+            for module_name, name, B, A in iter_lora_factors_with_names(model, self.target_adapter_keys):
+                # Only clear Adam moments (keep other state such as step).
+                self._zero_adam_moments_for_param(B)
+                self._zero_adam_moments_for_param(A)
+
         if was_training:
             model.train()
 
@@ -423,15 +453,25 @@ class DistributedSvdRefactorTrainer(Trainer):
         """
         if self._is_lr_restart():
             if self.accelerator.process_index == 0:
-                print(f"Step {step}: Detected LR restart, performing distributed low-rank refactor...")
-            self.distributed_low_rank_refactor(
-                do_refactor = self.do_refactor,
-                adjust_lora_alpha = self.adjust_lora_alpha,
-                keep_s = self.keep_s,
-                min_alpha_ratio = self.min_alpha_ratio,
-                max_alpha_ratio = self.max_alpha_ratio,
-                )
-        
+                print(f"Step {step}: Detected LR restart,  performing distributed low-rank refactor...")
+            if self._refactor_times == 0 :
+                self.distributed_low_rank_refactor(
+                    do_refactor = True,
+                    adjust_lora_alpha = False,
+                    keep_s = False,
+                    keep_momentum = False,
+                    min_alpha_ratio = self.min_alpha_ratio,
+                    max_alpha_ratio = self.max_alpha_ratio,
+                    )
+            else:
+                self.distributed_low_rank_refactor(
+                    do_refactor = True,
+                    adjust_lora_alpha = self.adjust_lora_alpha,
+                    keep_s = False,
+                    min_alpha_ratio = self.min_alpha_ratio,
+                    max_alpha_ratio = self.max_alpha_ratio,
+                    )
+            self._refactor_times += 1 
         return loss
 
     def save_alpha_log(self, filepath: str):
@@ -477,13 +517,14 @@ def get_warmup_restart_then_final_decay_scheduler_ratio(
 
         # repeated phase
         if step < repeat_total_steps:
-            if step < repeat_warmup_steps : # first warmup
+            pos = step % cycle_len
+            time = step // cycle_len
+
+            if time <=1 and pos < repeat_warmup_steps : # first warmup
                 if repeat_warmup_steps == 0:
                     return 1.0
                 t = step / repeat_warmup_steps
                 return first_warmup_start_lr_rate + (1.0 - first_warmup_start_lr_rate) * t
-
-            pos = step % cycle_len
 
             if pos < repeat_warmup_steps:
                 if repeat_warmup_steps == 0:
