@@ -422,7 +422,8 @@ class DistributedSvdRefactorTrainer(Trainer):
             return loss
         """
         if self._is_lr_restart():
-            print(f"Step {step}: Detected LR restart, performing distributed low-rank refactor...")
+            if self.accelerator.process_index == 0:
+                print(f"Step {step}: Detected LR restart, performing distributed low-rank refactor...")
             self.distributed_low_rank_refactor(
                 do_refactor = self.do_refactor,
                 adjust_lora_alpha = self.adjust_lora_alpha,
@@ -452,6 +453,7 @@ def get_warmup_restart_then_final_decay_scheduler_ratio(
     repeat_decay_type="cosine",
     final_decay_type="cosine",
     warmup_start_lr_rate=0.0,
+    first_warmup_start_lr_rate=0.0,
     last_epoch=-1,
 ):
 
@@ -475,6 +477,12 @@ def get_warmup_restart_then_final_decay_scheduler_ratio(
 
         # repeated phase
         if step < repeat_total_steps:
+            if step < repeat_warmup_steps : # first warmup
+                if repeat_warmup_steps == 0:
+                    return 1.0
+                t = step / repeat_warmup_steps
+                return first_warmup_start_lr_rate + (1.0 - first_warmup_start_lr_rate) * t
+
             pos = step % cycle_len
 
             if pos < repeat_warmup_steps:

@@ -387,7 +387,6 @@ def train(
             ),
         }
     
-    """
     common_args['model'] = restart_init_train(
         trainning_args = common_args['args'],
         init_steps = sr_init_steps,
@@ -399,7 +398,6 @@ def train(
         min_alpha_ratio= min_alpha_ratio,
         max_alpha_ratio= max_alpha_ratio,
     )
-    """
 
     optimizer = AdamW(
         params=filter(lambda p: p.requires_grad, model.parameters()),

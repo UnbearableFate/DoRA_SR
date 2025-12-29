@@ -2,7 +2,7 @@
 #PBS -q regular-g
 #PBS -W group_list=xg24i002
 #PBS -l select=16:mpiprocs=1
-#PBS -l walltime=01:30:00
+#PBS -l walltime=00:50:00
 #PBS -j oe
 #PBS -m abe
 
@@ -55,7 +55,7 @@ mpirun --mca mpi_abort_print_stack 1 \
                 export HF_HOME='"${HF_HOME}"'; \
                 export HF_DATASETS_CACHE='"${HF_DATASETS_CACHE}"'; \
                 echo "Running on rank $RANK out of $WORLD_SIZE"; \
-                '"${PYTHON_PATH}"' my_finetune_go.py  \
+                '"${PYTHON_PATH}"' my_finetune_go2.py  \
                     --base_model=Qwen/Qwen3-8B \
                     --data_path=/work/xg24i002/x10041/LLM-Adapters/ft-training_set/commonsense_170k.json \
                     --output_dir=./outputs/ \
@@ -84,8 +84,11 @@ mpirun --mca mpi_abort_print_stack 1 \
                     --sr_init_steps=320 \
                     --adjust_lora_alpha=0 \
                     --do_refactor=True \
-                    --keep_s=False \
                     --min_alpha_ratio=0.8 \
                     --max_alpha_ratio=1.6 \
-                    --repeat_n=3 \
+                    --repeat_n=2 \
+                    --warmup_start_lr_rate=0.3 \
+                    --repeat_warmup_ratio=0.02 \
+                    --repeat_decay_ratio=0.04 \
+                    --repeat_end_lr_rate=0.96 \
                     '
